@@ -19,3 +19,7 @@ Thumbs.db
 
 # 本机下载的 FFmpeg 工具
 /Tools/FFMpeg/
+
+# 下载的源素材与生成的测试产物
+/Tests/Source/
+/Tests/Generated/

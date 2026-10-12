@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\SetupFFmpeg.ps1 -Ver
 
 ## 开发状态
 
-当前包含目录骨架、包配置和 FFmpeg 初始化脚本，尚未实现播放器、原生插件或转码工具。
+当前包含包骨架、FFmpeg 初始化、测试素材准备和批量导出工具；播放器及原生插件尚未实现。
 此目录位于游戏仓库之外，使用独立 Git 仓库管理。
 
 ## Unity 面板日志接口
@@ -62,3 +62,7 @@ Unity 面板启动隐藏进程，设置 UseShellExecute=false、CreateNoWindow=t
 使用异步进程等待，避免阻塞编辑器。退出码 0 表示完成，1 表示失败；仅在收到 Completed 且退出码为 0 时提示安装成功。
 脚本自身日志全部写到标准输出；标准错误用于接收原生工具或 PowerShell 启动异常。
 运行安装时会持有独占锁，避免多个面板同时安装或清理同一份缓存。
+
+## 视频素材与导出
+
+Tests/Source 和 Tests/Generated 均忽略 Git，分别存放源素材与生成物。操作见 [测试素材说明](Tests/README.md) 和 [批量导出说明](Tools/VideoPipeline/README.md)。
