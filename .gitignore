@@ -1,0 +1,21 @@
+# 本机配置与离线工具缓存
+Tools/**/local.settings.json
+Tools/**/Cache/
+Tools/**/Temp/
+Tools/**/Output/
+Tools/**/bin/
+Tools/**/obj/
+
+# 原生构建产物；发布到 Runtime/Plugins 的插件单独管理
+Native/**/build/
+Native/**/out/
+Native/**/.vs/
+Native/**/*.user
+
+# 通用本机文件
+.DS_Store
+Thumbs.db
+*.log
+
+# 本机下载的 FFmpeg 工具
+/Tools/FFmpeg/

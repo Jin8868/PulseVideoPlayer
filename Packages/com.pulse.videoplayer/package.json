@@ -1,0 +1,10 @@
+{
+  "name": "com.pulse.videoplayer",
+  "version": "0.1.0",
+  "displayName": "PulseVideoPlayer",
+  "description": "Game-clock-driven native video playback for Unity.",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.cysharp.unitask": "2.5.10"
+  }
+}

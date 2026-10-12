@@ -1,0 +1,8 @@
+{
+  "name": "PulseVideoPlayer",
+  "rootNamespace": "PulseVideoPlayer",
+  "references": [
+    "UniTask"
+  ],
+  "autoReferenced": true
+}
