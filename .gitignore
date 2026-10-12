@@ -18,4 +18,4 @@ Thumbs.db
 *.log
 
 # 本机下载的 FFmpeg 工具
-/Tools/FFmpeg/
+/Tools/FFMpeg/
