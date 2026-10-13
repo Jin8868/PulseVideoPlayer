@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\SetupFFmpeg.ps1 -Ver
 
 ## 开发状态
 
-当前包含包骨架、FFmpeg 初始化、测试素材准备和批量导出工具；播放器及原生插件尚未实现。
+当前包含离线导出与 Pulse v1 封装工具、元数据读取和异步加载，以及 Windows x64 / D3D11 原生首帧后端和 PulsePlayer 门面。宿主已验证首帧显示及一次关闭后的已登记原生资源归零。连续播放、音频、暂停、Seek 和其他平台后端尚未实现。
 此目录位于游戏仓库之外，使用独立 Git 仓库管理。
 
 ## Unity 面板日志接口
@@ -66,3 +66,19 @@ Unity 面板启动隐藏进程，设置 UseShellExecute=false、CreateNoWindow=t
 ## 视频素材与导出
 
 Tests/Source 和 Tests/Generated 均忽略 Git，分别存放源素材与生成物。操作见 [测试素材说明](Tests/README.md) 和 [批量导出说明](Tools/VideoPipeline/README.md)。
+
+
+## 运行时读取
+
+接口、数据源边界与验证方法见 [运行时读取说明](Packages/com.pulse.videoplayer/README.md)。
+
+## Windows 首帧阶段
+
+仓库包含已在当前 Unity 2022.3 Windows 宿主验证的 x64 DLL 和对应原生源码。
+普通使用无需重新编译 DLL；修改 Native/Windows 源码后需要用 Tools/BuildWindowsNative.ps1 重建。
+详细操作见 [Windows 构建与验证说明](Native/Windows/README.md)。
+FFmpeg 仅用于离线制作，当前运行时使用 Windows Media Foundation 与 Unity D3D11 设备。
+
+宿主的测试按钮、资源采样与统计日志由 UNITY_EDITOR 或 DEVELOPMENT_BUILD 控制。
+原生诊断接口保留，不会主动打印；仅被调用时读取已登记资源计数。
+这不是完整显存统计，也不证明所有驱动缓存均已回收。

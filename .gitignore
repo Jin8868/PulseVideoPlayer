@@ -23,3 +23,9 @@ Thumbs.db
 # 下载的源素材与生成的测试产物
 /Tests/Source/
 /Tests/Generated/
+
+# Unity 包只提交运行所需 DLL，调试符号和链接中间产物忽略
+/Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.pdb
+/Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.ilk
+/Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.lib
+/Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.exp

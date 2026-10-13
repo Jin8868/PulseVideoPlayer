@@ -28,6 +28,7 @@ param(
 
 $script:UseJsonLog = [bool]$JsonLog
 . (Join-Path $PSScriptRoot 'VideoPipelineCommon.ps1')
+. (Join-Path $PSScriptRoot 'PulseContainer.ps1')
 $ffmpegBin = Join-Path $PSScriptRoot '../FFMpeg/ffmpeg-9.0.2-essentials_build/bin'
 $ffmpegPath = Join-Path $ffmpegBin 'ffmpeg.exe'
 $ffprobePath = Join-Path $ffmpegBin 'ffprobe.exe'
@@ -62,7 +63,7 @@ try {
         $stem = [IO.Path]::GetFileNameWithoutExtension($inputFile)
         if ($outputNames.ContainsKey($stem)) { throw "输入文件存在同名：$stem，请分开导出。" }
         $outputNames[$stem] = $true
-        foreach ($suffix in @('.mp4', '.audio.m4a', '.metadata.json')) {
+        foreach ($suffix in @('.mp4', '.pulse', '.audio.m4a', '.metadata.json')) {
             if (Test-Path -LiteralPath (Join-Path $outputRoot ($stem + $suffix))) {
                 throw "产物已存在：$stem$suffix。请使用新的输出目录或先移走旧产物。"
             }
@@ -94,7 +95,7 @@ try {
             } else {
                 $arguments += @('-map', '0:v:0', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2')
             }
-            $arguments += @('-an', '-sn', '-dn', '-c:v', 'libx264', '-preset', $Preset,
+            $arguments += @('-an', '-sn', '-dn', '-map_chapters', '-1', '-c:v', 'libx264', '-preset', $Preset,
                 '-crf', [string]$CRF, '-pix_fmt', 'yuv420p', '-profile:v', 'high',
                 '-r', [string]$FrameRate, '-fps_mode', 'cfr', '-g', [string]$GOP,
                 '-keyint_min', [string]$GOP, '-sc_threshold', '0', '-movflags', '+faststart', $outputPath)
@@ -102,7 +103,7 @@ try {
             if (@($mediaInfo.streams | Where-Object { $_.codec_type -eq 'audio' }).Count -gt 0) {
                 Invoke-FFmpeg -Executable $ffmpegPath -InputFile $inputFile -Duration $duration -Stage 'Audio' `
                     -Arguments @('-n', '-i', $inputFile, '-map', '0:a:0', '-vn', '-sn', '-c:a', 'aac',
-                        '-b:a', '192k', (Join-Path $outputRoot "$stem.audio.m4a"))
+                        '-b:a', '192k', '-map_chapters', '-1', (Join-Path $outputRoot "$stem.audio.m4a"))
             }
             $subtitleIndex = 0
             foreach ($subtitle in @($mediaInfo.streams | Where-Object { $_.codec_type -eq 'subtitle' })) {
@@ -114,7 +115,7 @@ try {
             }
             $outputInfo = Get-MediaInfo -FFprobe $ffprobePath -Path $outputPath
             $outputVideo = @($outputInfo.streams | Where-Object { $_.codec_type -eq 'video' })[0]
-            if ($outputVideo.codec_name -ne 'h264' -or $outputVideo.pix_fmt -ne 'yuv420p' -or
+            if ($outputInfo.streams.Count -ne 1 -or $outputVideo.codec_name -ne 'h264' -or $outputVideo.pix_fmt -ne 'yuv420p' -or
                 $outputVideo.avg_frame_rate -ne "$FrameRate/1" -or
                 @($outputInfo.streams | Where-Object { $_.codec_type -eq 'audio' }).Count -ne 0) {
                 throw '导出产物不符合 H.264 8bit 无音轨规格。'
@@ -134,9 +135,16 @@ try {
                 $metadata.alphaRect = @(0, ($video.height + 2), $video.width, $video.height)
                 $metadata.alphaMode = 'Straight'
             }
+            $pulseMetadata = Get-PulseMetadata -MP4Path $outputPath -FFprobe $ffprobePath -BaseMetadata $metadata
             [IO.File]::WriteAllText((Join-Path $outputRoot "$stem.metadata.json"),
-                ($metadata | ConvertTo-Json -Depth 5), $utf8)
-            Write-PipelineLog -Stage 'FileCompleted' -InputFile $inputFile -Percent 100 -Message "已导出：$outputPath"
+                ($pulseMetadata | ConvertTo-Json -Depth 8), $utf8)
+            $pulsePath = Join-Path $outputRoot "$stem.pulse"
+            Write-PulseContainer -MP4Path $outputPath -OutputPath $pulsePath -Metadata $pulseMetadata | Out-Null
+            $pulseInfo = Get-MediaInfo -FFprobe $ffprobePath -Path $pulsePath
+            if ($pulseInfo.streams.Count -ne 1 -or $pulseInfo.streams[0].codec_name -ne 'h264') {
+                throw 'Pulse 容器 ffprobe 校验失败。'
+            }
+            Write-PipelineLog -Stage 'FileCompleted' -InputFile $inputFile -Percent 100 -Message "已导出：$pulsePath"
         } catch {
             $failedCount++
             Write-PipelineLog -Stage 'FileFailed' -InputFile $inputFile -Level 'Error' -Message $_.Exception.Message

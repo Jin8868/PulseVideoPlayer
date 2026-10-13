@@ -46,7 +46,7 @@ InputPaths、InputDirectory 和 InputListFile 可合并使用，重复路径自�
 - `<name>.subtitleN.srt`：提取支持的文本字幕流；图片字幕不转换。
 - `<name>.metadata.json`：测试用编码尺寸、显示尺寸、RGB/Alpha 区域和帧数。
 
-目前没有 UUID Box 注入或加密，不输出完整 .pulse 文件。HDR 色调映射、预乘 Alpha 转换等也尚未实现。
+已支持生成含 Pulse v1 UUID 元数据的 .pulse，保留 MP4 和 JSON 便于检查。加密、HDR 色调映射和预乘 Alpha 转换尚未实现。
 
 ## Unity 实时日志
 
@@ -58,3 +58,17 @@ InputPaths、InputDirectory 和 InputListFile 可合并使用，重复路径自�
 面板隐藏启动进程、异步读取 UTF-8 标准输出及错误输出，日志入队后在编辑器主线程刷新。
 不要在 Unity 主线程等待进程或读完整输出。收到 Completed 并确认退出码为 0 才表示本批次成功。
 若面板增加取消功能，需要同时终止 PowerShell 和其 FFmpeg 子进程，并处理部分输出文件。
+## Pulse 容器生成
+
+ExportVideos.ps1 已接入 .pulse 生成。已有标准化无音轨 MP4 时，可独立调用：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\VideoPipeline\ConvertToPulse.ps1 `
+    -InputDirectory .\Tests\Generated\Synthetic `
+    -OutputDirectory .\Tests\Generated\Synthetic -JsonLog
+```
+
+支持 InputPaths、InputDirectory、InputListFile 和 Recurse，不覆盖已有 .pulse。
+UUID Box 内保存 UTF-8 JSON，运行时直接从 .pulse 读取，不依赖旁路 JSON。
+Container 阶段输出复制字节进度，Verify 阶段回读元数据并通过 ffprobe 验证。
+时间、级别和阶段字段与安装脚本一致，Unity 可以使用同一套实时日志接收器。
