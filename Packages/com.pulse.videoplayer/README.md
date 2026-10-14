@@ -1,7 +1,7 @@
 # PulseVideoPlayer 运行时读取
 
 当前已实现本地文件数据源、Pulse v1 容器扫描、严格 UTF-8/JSON 解析、元数据校验和异步加载。
-已加入 Windows x64 / D3D11 首帧解码、GPU 纹理桥接与 PulsePlayer 门面，已在当前 Windows 宿主编译并验证首帧显示及基础打开/关闭。连续播放、音频与 Seek 尚未实现。构建及验证步骤见仓库 Native/Windows/README.md。
+已加入 Windows x64 / D3D11 首帧解码、GPU 纹理桥接与 PulsePlayer 门面，已在当前 Windows 宿主编译并验证首帧显示及基础打开/关闭。当前新增连续播放与暂停/恢复的待验证源码；音频与 Seek 尚未实现。构建及验证步骤见仓库 Native/Windows/README.md。
 
 ```csharp
 PulseMetadata metadata = await PulseMetadataLoader.ReadAsync(filePath, cancellationToken);
@@ -36,3 +36,84 @@ FileSource 串行化定位、读取与关闭，支持幂等 Dispose；关闭后�
 读取 StreamingAssets/PulseTests 下的 Synthetic、Alpha、Sintel 三组素材并打印尺寸和时间信息。
 验证程序源码位于仓库 Tests/Runtime/PulseReaderChecks.cs，可使用 Unity 随附 Mono/Roslyn 独立运行。
 素材不提交 Git，需要从 Tests/Generated 复制到宿主的 StreamingAssets/PulseTests。
+## 连续播放接口
+
+```csharp
+await player.OpenAsync(filePath, cancellationToken);
+player.Play();
+player.Pause();
+player.Resume();
+double timeMs = player.GetPlayTimeMs();
+await player.CloseAsync();
+player.Dispose();
+```
+
+全部操作从 Unity 主线程调用。OpenAsync 只准备首帧；Play 开始时钟，Pause 冻结时间，Resume 从保存位置继续。
+IPulseClock 只暴露毫秒时钟，IPulsePlayerEvents 暴露 Started/Paused/Resumed/Stopped/Completed/Failed。
+末帧完成后保持 Ended 和最后一帧，需要 Close/OpenAsync 后再 Play 才能重播；Stop 等同请求关闭。
+使用 RawImage 时先解除 texture/material 绑定，再关闭或释放播放器。
+PresentedFrame、PresentedTimeMs、TextureVersion、DroppedFrames 可观察调度结果。
+连续播放已由用户验证。本次 Seek 使用 Windows ABI 3，必须按 Native/Windows/README.md 重新构建 DLL。
+
+
+## 项目 UI 组件
+
+在项目自有的预制体上添加 PulseVideoPlayer 组件，类型为 PulseVideoPlayer.UI.PulseVideoPlayer。
+组件位于 Runtime/UI，独立程序集 PulseVideoPlayer.UI 引用核心、UniTask 和 Unity.ugui；文字使用 UnityEngine.UI.Text。
+预制体保存在各项目的 Assets 中，样式、层级和名称由项目决定。
+
+Inspector 引用：
+
+| 字段 | 控件 | 用途 |
+| --- | --- | --- |
+| Video Image | RawImage | 必填，显示视频画面 |
+| Loading Progress Image | Image | 可选，设置 Type 为 Filled，显示加载进度 |
+| Loading Percentage Text | Text | 可选，显示加载百分比 |
+| Playback Progress Slider | Slider | 可选，支持点击、键盘调整及拖动预览，松手后跳转 |
+| Playback Time Text | Text | 可选，显示 0:00/0:36；超过一小时使用 h:mm:ss |
+| Play Button | Button | 可选，打开并播放、从暂停恢复、结束后重播 |
+| Pause Button | Button | 可选，暂停播放 |
+
+按钮拖入引用后自动注册监听，无需额外配置 On Click。只移除组件自己的监听。
+Aspect Ratio Fitter 可引用项目已有适配器，或自动读取 RawImage 上已有适配器；组件不会创建布局。
+显示比例随视频元数据更新，关闭后还原。
+
+Source Path 可填写相对 StreamingAssets 的路径，例如 PulseTests/Synthetic/all_in_one.pulse。
+勾选 Open On Enable 后启用时打开；Play When Ready 决定打开完成后是否自动播放。
+也可以不勾选 Open On Enable，通过播放按钮或无参 Play() 按 Inspector 路径加载并播放；暂停时 Play() 恢复，结束时 Play() 重播。显式路径仍可使用 OpenAsync(真实本地路径)，带视频 URL、音频 URL 和循环配置的 Play/PlayAsync 接口留待下一阶段。
+业务程序集直接引用组件时，需要在自己的 asmdef 中添加 PulseVideoPlayer.UI 引用。
+
+本地首帧加载显示旋转圆弧和“加载中…”文字，完成、关闭或失败后隐藏；不提供连续解码百分比。
+加载 Image 使用 Filled / Radial 360，并保持 GameObject 及父对象激活。外部下载流程调用 SetLoadingProgress(0~1) 时恢复真实百分比填充，停止旋转；完成时隐藏。
+加载控件的 GameObject 应保持激活，组件仅切换 Graphic.enabled。
+时间文字只在整秒变化时更新；暂停后冻结，结束后显示总时长，关闭后显示 0:00/0:00。
+
+OpenAsync、Play、Pause、Resume、Replay、Close、CloseAsync、Stop 均从 Unity 主线程调用。
+Ready、Started、Paused、Resumed、Stopped、Completed、Failed 和 LoadingProgressChanged 可供业务订阅。
+关闭或禁用组件时，先解除 RawImage 的视频纹理和材质绑定，再请求释放底层播放器。
+CloseAsync 等待本次播放器的原生资源退役，需要 Unity PlayerLoop 持续运行。
+本次 Seek 将原生 ABI 升至 3，需要关闭 Unity 后重新构建 DLL。
+当前仍使用 Windows/D3D11 后端，音频尚未接入。
+
+
+## 进度条与 Seek（ABI 3）
+
+组件自动为 Playback Progress Slider 注册值变化和指针事件。
+拖动期间显示目标时间并暂停自动覆盖滑块；松手后跳转，点击和键盘调整也会提交跳转。
+播放中拖动后继续播放，暂停中拖动只更新画面；结束后拖动进入暂停状态，可点击播放按钮恢复。
+目标画面未提交前冻结播放时钟，避免把定位耗时算入播放时间。
+拖动预览期间原视频继续播放，不逐帧提交定位请求；松手后才采用最终目标。
+Unity 的 Slider 指针按下监听可能先于转发组件执行，因此首次点击也可能提交一次定位请求。
+连续请求采用最新请求，旧请求不会被标记为新请求的完成结果。
+
+PulsePlayer 和 UI 组件都提供 Seek(double timeSeconds)、SeekAsync(double timeSeconds, CancellationToken)、IsSeeking。
+Seek 是非阻塞请求；SeekAsync 等待目标画面的 GPU 围栏完成。
+取消令牌只取消等待，不撤销原生请求；关闭或新的 Seek 取消旧的等待。
+超出范围的有限时间会钳制到视频区间，末尾映射到最后一帧；NaN/Infinity 会抛出异常。
+Seek 不重建 Unity 纹理或材质，原生读取和定位都由同一解码线程执行。
+GPU 正在使用的样本必须等围栏结束后才能归还及刷新解码器。
+定位先到关键帧，再解码并丢弃目标前的样本；相对 PTS 依据导出器的固定帧率换算帧序号。
+目标帧等待上限为 20 秒，超时通过 Failed 报告并关闭会话。
+
+Windows 原生读取到 EOF 后保留工作线程等待新 Seek 或 Close，关闭后资源计数仍应归零。
+这里只增加视频跳转，独立音频或字幕尚未实现联动。

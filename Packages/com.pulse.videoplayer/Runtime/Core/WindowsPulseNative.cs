@@ -12,7 +12,7 @@ namespace PulseVideoPlayer
     {
         Starting, DeviceManager, OpeningFile, SelectingNV12, Decoding,
         AcquiringSurface, VideoProcessor, Converting, Fence,
-        InspectingSourceType, ReadingSample, InspectingDecodedType, ValidatingDecodedSize
+        InspectingSourceType, ReadingSample, InspectingDecodedType, ValidatingDecodedSize, Seeking
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -25,6 +25,18 @@ namespace PulseVideoPlayer
         internal int Height;
         internal IntPtr Texture;
         internal long Timestamp;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct PulseNativePlayback
+    {
+        internal long FrameIndex;
+        internal long Timestamp;
+        internal long TextureVersion;
+        internal long DroppedFrames;
+        internal int EndOfStream;
+        internal int InFlight;
+        internal ulong CompletedSeek;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -50,7 +62,9 @@ namespace PulseVideoPlayer
 
         [DllImport(LIBRARYNAME, EntryPoint = "Pulse_CreateSession", CallingConvention = CallingConvention.Cdecl,
             CharSet = CharSet.Unicode)]
-        internal static extern int CreateSession(string filePath, int width, int height, int matrix, out ulong handle);
+        internal static extern int CreateSession(
+            string filePath, int width, int height, int matrix,
+            long frames, uint numerator, uint denominator, out ulong handle);
 
         [DllImport(LIBRARYNAME, EntryPoint = "Pulse_GetSnapshot", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int GetSnapshot(ulong handle, out PulseNativeSnapshot snapshot);
@@ -63,5 +77,17 @@ namespace PulseVideoPlayer
 
         [DllImport(LIBRARYNAME, EntryPoint = "Pulse_GetResources", CallingConvention = CallingConvention.Cdecl)]
         internal static extern int GetResources(out PulseNativeResources resources);
+
+        [DllImport(LIBRARYNAME, EntryPoint = "Pulse_GetApiVersion", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int GetApiVersion();
+
+        [DllImport(LIBRARYNAME, EntryPoint = "Pulse_SetTargetFrame", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int SetTargetFrame(ulong handle, long frameIndex, int playing);
+
+        [DllImport(LIBRARYNAME, EntryPoint = "Pulse_Seek", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern ulong Seek(ulong handle, long frameIndex, long relativeTimestamp);
+
+        [DllImport(LIBRARYNAME, EntryPoint = "Pulse_GetPlayback", CallingConvention = CallingConvention.Cdecl)]
+        internal static extern int GetPlayback(ulong handle, out PulseNativePlayback playback);
     }
 }

@@ -1,0 +1,10 @@
+{
+  "name": "PulseVideoPlayer.UI",
+  "rootNamespace": "PulseVideoPlayer.UI",
+  "references": [
+    "PulseVideoPlayer",
+    "UniTask",
+    "Unity.ugui"
+  ],
+  "autoReferenced": true
+}

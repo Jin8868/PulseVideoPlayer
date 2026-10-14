@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\SetupFFmpeg.ps1 -Ver
 
 ## 开发状态
 
-当前包含离线导出与 Pulse v1 封装工具、元数据读取和异步加载，以及 Windows x64 / D3D11 原生首帧后端和 PulsePlayer 门面。宿主已验证首帧显示及一次关闭后的已登记原生资源归零。连续播放、音频、暂停、Seek 和其他平台后端尚未实现。
+当前包含离线导出与 Pulse v1 封装工具、元数据读取、Windows x64 / D3D11 连续播放、暂停/恢复、Seek，以及独立 UI 组件。宿主已验证基础连续播放和关闭后的资源归零；新增 Seek 与 UI 清理仍需运行验收。音频、循环、HTTP 视频加载、YooAssets 资源适配和其他平台后端留待下一阶段。
 此目录位于游戏仓库之外，使用独立 Git 仓库管理。
 
 ## Unity 面板日志接口
@@ -82,3 +82,5 @@ FFmpeg 仅用于离线制作，当前运行时使用 Windows Media Foundation �
 宿主的测试按钮、资源采样与统计日志由 UNITY_EDITOR 或 DEVELOPMENT_BUILD 控制。
 原生诊断接口保留，不会主动打印；仅被调用时读取已登记资源计数。
 这不是完整显存统计，也不证明所有驱动缓存均已回收。
+
+本阶段加入连续播放、暂停/恢复、Seek、游戏时钟和生命周期事件，以及带加载圆环、播放按钮和进度拖动的 UI 组件。仓库包含 ABI 3 Windows DLL；原生源码变化后关闭 Unity 并运行 Tools/BuildWindowsNative.bat 重建。手动验收见 Native/Windows/README.md。音频计划通过宿主 Wwise 适配，播放器核心保持独立。

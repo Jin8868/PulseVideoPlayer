@@ -5,6 +5,7 @@
   "description": "Game-clock-driven native video playback for Unity.",
   "unity": "2022.3",
   "dependencies": {
-    "com.cysharp.unitask": "2.5.10"
+    "com.cysharp.unitask": "2.5.10",
+    "com.unity.ugui": "1.0.0"
   }
 }
