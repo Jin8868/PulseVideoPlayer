@@ -42,7 +42,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\SetupFFmpeg.ps1 -Ver
 
 ## 开发状态
 
-当前包含离线导出与 Pulse v1 封装工具、元数据读取、Windows x64 / D3D11 连续播放、暂停/恢复、Seek，以及独立 UI 组件。宿主已验证基础连续播放和关闭后的资源归零；新增 Seek 与 UI 清理仍需运行验收。音频、循环、HTTP 视频加载、YooAssets 资源适配和其他平台后端留待下一阶段。
+当前包含离线导出与 Pulse v1 封装工具、元数据读取、Windows x64 / D3D11 连续播放、暂停/恢复、Seek，以及独立 UI 组件。宿主已验证基础连续播放和关闭后的资源归零；新增 Seek 与 UI 清理仍需运行验收。宿主新增 YooAssets/CDN 资源、Wwise 音轨与循环适配，独立包通过 IPulsePlaybackDriver 接入；本次适配尚待编译运行验收。其他平台原生后端仍待实现。
 此目录位于游戏仓库之外，使用独立 Git 仓库管理。
 
 ## Unity 面板日志接口

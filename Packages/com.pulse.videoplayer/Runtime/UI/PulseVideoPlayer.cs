@@ -20,7 +20,7 @@ namespace PulseVideoPlayer.UI
         [Header("显示与进度引用")]
         [Tooltip("必填：视频显示区域，层级和名称不限。")]
         [SerializeField] private RawImage m_videoImage; // 视频画面引用。
-        [Tooltip("可选：设置为 Filled / Radial 360。本地打开时显示旋转圆环，外部进度更新填充量。")]
+        [Tooltip("可选：设置为 Filled / Radial 360。直接使用 fillAmount 显示零至一的加载进度，不旋转图像。")]
         [SerializeField] private Image m_loadingProgressImage; // 加载进度引用。
         [Tooltip("可选：加载百分比文字，使用 Unity UI Text。")]
         [SerializeField] private Text m_loadingPercentageText; // 加载百分比引用。
@@ -38,6 +38,9 @@ namespace PulseVideoPlayer.UI
         [SerializeField] private bool m_openOnEnable; // 启用时是否打开配置的视频。
         [SerializeField] private bool m_playWhenReady = true; // 首帧准备完成后是否自动播放。
         [SerializeField] private bool m_preserveAspectRatio = true; // 是否更新已有适配器的比例。
+        [SerializeField] private string m_audioEventKey = string.Empty; // 宿主音频事件，空值为无音轨。
+        [SerializeField] private EPulseLoopMode m_loopMode = EPulseLoopMode.Once; // 总播放次数策略。
+        [Min(1)] [SerializeField] private int m_playCount = 1; // 指定次数模式的总播放次数。
 
         private PulsePlayer m_player; // 本组件拥有的底层播放器。
         private CancellationTokenSource m_openCancellation; // 当前打开任务的取消源，由任务收尾释放。
@@ -62,9 +65,8 @@ namespace PulseVideoPlayer.UI
         private PulseSeekSlider m_sliderInput; // 接收滑条自身的指针事件。
         private bool m_isDragging; // 用户拖动期间停止自动覆盖滑条。
         private float m_previewProgress; // 拖动中的预览位置，范围零至一。
-        private bool m_isLoadingIndeterminate; // 本地首帧准备没有连续百分比，使用旋转提示。
-        private Image m_spinnerImage; // 当前旋转的图像，关闭时恢复其原始角度。
-        private Quaternion m_spinnerRotation; // 开始旋转前的项目局部旋转。
+        private IPulsePlaybackDriver m_playbackDriver; // 宿主注入的资源和音画协调实现。
+        private bool m_hasPendingSliderSeek; // 非拖动的值变化延迟到指针事件处理完后再提交。
 
         /// <summary>Inspector 绑定的视频画面。</summary>
         public RawImage VideoImage => m_videoImage;
@@ -95,6 +97,16 @@ namespace PulseVideoPlayer.UI
         public Exception LastError => m_lastError;
         /// <summary>是否正在等待最新跳转请求的目标画面。</summary>
         public bool IsSeeking => m_player?.IsSeeking ?? false;
+        /// <summary>宿主是否正在准备资源或协调跳转。</summary>
+        public bool IsPlaybackBusy => m_playbackDriver?.IsBusy ?? false;
+        /// <summary>Inspector 配置的资源地址或本地路径。</summary>
+        public string ConfiguredVideoLocation => ResolveConfiguredPath();
+        /// <summary>Inspector 配置的音频事件。</summary>
+        public string AudioEventKey => m_audioEventKey;
+        /// <summary>Inspector 配置的循环模式。</summary>
+        public EPulseLoopMode LoopMode => m_loopMode;
+        /// <summary>Inspector 配置的总播放次数。</summary>
+        public int PlayCount => m_playCount;
 
         /// <summary>首帧与显示材质绑定完成，可以开始播放。</summary>
         public event Action Ready;
@@ -122,12 +134,12 @@ namespace PulseVideoPlayer.UI
             SetLoadingVisible(false);
             RefreshButtons();
             RefreshTimeText();
-            if (m_openOnEnable) Open();
+            if (m_openOnEnable) Play();
         }
 
         private void Update()
         {
-            UpdateLoadingSpinner();
+            m_playbackDriver?.Tick();
             RefreshButtons();
             RefreshTimeText();
             // 拖动期间由用户控制滑条，避免播放时钟每帧把滑块拉回。
@@ -137,12 +149,109 @@ namespace PulseVideoPlayer.UI
             m_playbackProgressSlider.SetValueWithoutNotify(Mathf.Clamp01(progress));
         }
 
-        /// <summary>打开 Inspector 配置的视频，可直接绑定到 Unity Button。</summary>
+        private void LateUpdate()
+        {
+            if (!m_hasPendingSliderSeek) return;
+            m_hasPendingSliderSeek = false;
+            // Slider 的值变化可能先于指针按下转发；等待本帧事件分发结束，避免误把按下当成 Seek。
+            if (!m_isDragging && CanSeek()) SeekFromSlider(m_previewProgress);
+        }
+
+        /// <summary>注入宿主资源和音频实现；传空值恢复组件本地播放模式。</summary>
+        /// <param name="driver">宿主实现，不要求继承 MonoBehaviour。</param>
+        /// <exception cref="InvalidOperationException">组件仍持有打开的播放器。</exception>
+        public void SetPlaybackDriver(IPulsePlaybackDriver driver)
+        {
+            if (m_player != null || m_openCancellation != null || IsPlaybackBusy)
+                throw new InvalidOperationException("请先等待 CloseAsync 完成再替换播放适配器。");
+            m_playbackDriver = driver;
+        }
+
+        /// <summary>加载资源和可选音轨并开始播放，空音频事件表示无音轨。</summary>
+        /// <param name="videoLocation">资源地址、本地路径或 CDN URL。</param>
+        /// <param name="audioEventKey">宿主音频事件 Key。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">Count 模式下的总播放次数。</param>
+        /// <param name="cancellationToken">取消本次播放生命周期。</param>
+        /// <returns>准备完成并开始播放的任务，不等待播放结束。</returns>
+        /// <exception cref="NotSupportedException">未安装处理资源、音频和循环的宿主适配器。</exception>
+        public UniTask PlayAsync(string videoLocation, string audioEventKey = null,
+            EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1,
+            CancellationToken cancellationToken = default)
+        {
+            if (m_playbackDriver != null)
+                return m_playbackDriver.PlayAsync(videoLocation, audioEventKey, loopMode, playCount, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(audioEventKey) || loopMode != EPulseLoopMode.Once)
+                throw new NotSupportedException("音轨与循环需要先注入宿主播放适配器。");
+            return OpenCoreAsync(videoLocation, true, cancellationToken);
+        }
+
+        /// <summary>通过回调式入口加载并播放，错误通过 Failed 和 Unity 日志报告。</summary>
+        /// <param name="videoLocation">资源地址、本地路径或 CDN URL。</param>
+        /// <param name="audioEventKey">宿主音频事件 Key。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">总播放次数。</param>
+        public void Play(string videoLocation, string audioEventKey = null,
+            EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1)
+        {
+            try { PlayAsync(videoLocation, audioEventKey, loopMode, playCount).Forget(LogUnhandled); }
+            catch (Exception exception) { ReportPlaybackFailure(exception); }
+        }
+
+        /// <summary>宿主准备本地首帧，不自动开始播放。</summary>
+        /// <param name="filePath">已经交付的真实文件路径。</param>
+        /// <param name="cancellationToken">本次准备令牌。</param>
+        /// <returns>首帧绑定完成的任务。</returns>
+        public UniTask PrepareVideoAsync(string filePath, CancellationToken cancellationToken = default)
+        {
+            return OpenCoreAsync(filePath, false, cancellationToken);
+        }
+
+        /// <summary>宿主启动已经准备好的视频时间轴。</summary>
+        /// <exception cref="InvalidOperationException">视频尚未准备好。</exception>
+        public void StartPreparedVideo() { RequirePlayer().Play(); }
+
+        /// <summary>宿主暂停视频时间轴，音轨由宿主同步暂停。</summary>
+        /// <exception cref="InvalidOperationException">视频未就绪或当前状态不能暂停。</exception>
+        public void PauseVideo() { RequirePlayer().Pause(); }
+
+        /// <summary>宿主恢复视频时间轴，音轨由宿主同步恢复。</summary>
+        /// <exception cref="InvalidOperationException">视频未就绪或当前状态不能恢复。</exception>
+        public void ResumeVideo() { RequirePlayer().Resume(); }
+
+        /// <summary>宿主定位视频后端，不再次进入宿主协调逻辑。</summary>
+        /// <param name="timeSeconds">目标秒数。</param>
+        /// <param name="cancellationToken">本次等待令牌。</param>
+        /// <returns>目标画面就绪任务。</returns>
+        public UniTask SeekVideoAsync(double timeSeconds, CancellationToken cancellationToken = default)
+        {
+            return RequirePlayer().SeekAsync(timeSeconds, cancellationToken);
+        }
+
+        /// <summary>显示无确定百分比的加载提示，供宿主预加载音频等步骤使用。</summary>
+        public void ShowPreparing() { SetLoadingProgress(0); }
+
+        /// <summary>报告宿主失败，恢复界面并通知业务。</summary>
+        /// <param name="exception">失败原因。</param>
+        public void ReportPlaybackFailure(Exception exception)
+        {
+            m_lastError = exception;
+            SetLoadingVisible(false);
+            NotifyFailure(exception, true);
+        }
+
+        private void CloseVideo() { DetachPlayer()?.Dispose(); }
+
+        /// <summary>兼容旧接口，业务入口优先使用 Play 或 PlayAsync。</summary>
+        [Obsolete("业务播放使用 Play 或 PlayAsync；宿主准备首帧使用 PrepareVideoAsync。")]
         public void Open()
         {
             try
             {
-                OpenAsync(ResolveConfiguredPath()).Forget(LogUnhandled);
+                UniTask operation = m_playbackDriver != null
+                    ? PlayAsync(ConfiguredVideoLocation, m_audioEventKey, m_loopMode, m_playCount)
+                    : OpenCoreAsync(ResolveConfiguredPath(), m_playWhenReady, default);
+                operation.Forget(LogUnhandled);
             }
             catch (Exception exception)
             {
@@ -159,8 +268,11 @@ namespace PulseVideoPlayer.UI
         /// <exception cref="ArgumentException">路径为空。</exception>
         /// <exception cref="InvalidOperationException">组件未启用、缺少画面引用或 Shader 不可用。</exception>
         /// <exception cref="OperationCanceledException">打开被取消或被关闭、新打开取代。</exception>
+        [Obsolete("业务播放使用 PlayAsync；宿主准备首帧使用 PrepareVideoAsync。")]
         public UniTask OpenAsync(string filePath, CancellationToken cancellationToken = default)
         {
+            if (m_playbackDriver != null)
+                return PlayAsync(filePath, m_audioEventKey, m_loopMode, m_playCount, cancellationToken);
             return OpenCoreAsync(filePath, m_playWhenReady, cancellationToken);
         }
 
@@ -168,6 +280,7 @@ namespace PulseVideoPlayer.UI
         /// <exception cref="InvalidOperationException">已准备的播放器状态不允许开始播放。</exception>
         public void Play()
         {
+            if (IsPlaybackBusy) return;
             switch (State)
             {
                 case EPulsePlayerState.Ready:
@@ -179,7 +292,8 @@ namespace PulseVideoPlayer.UI
                 case EPulsePlayerState.Closed:
                 case EPulsePlayerState.Faulted:
                 case EPulsePlayerState.Ended:
-                    Replay();
+                    if (m_playbackDriver != null) m_playbackDriver.Replay();
+                    else Replay();
                     break;
             }
         }
@@ -188,6 +302,7 @@ namespace PulseVideoPlayer.UI
         /// <exception cref="InvalidOperationException">组件未准备好或当前不是播放状态。</exception>
         public void Pause()
         {
+            if (m_playbackDriver != null) { m_playbackDriver.Pause(); return; }
             RequirePlayer().Pause();
         }
 
@@ -195,12 +310,14 @@ namespace PulseVideoPlayer.UI
         /// <exception cref="InvalidOperationException">组件未准备好或当前不是暂停状态。</exception>
         public void Resume()
         {
+            if (m_playbackDriver != null) { m_playbackDriver.Resume(); return; }
             RequirePlayer().Resume();
         }
 
         /// <summary>重新打开最近的视频并从零开始播放，可直接绑定到 Unity Button。</summary>
         public void Replay()
         {
+            if (m_playbackDriver != null) { m_playbackDriver.Replay(); return; }
             try
             {
                 string filePath = string.IsNullOrWhiteSpace(m_lastOpenedPath)
@@ -221,6 +338,11 @@ namespace PulseVideoPlayer.UI
         /// <exception cref="ArgumentOutOfRangeException">时间不是有限数值。</exception>
         public void Seek(double timeSeconds)
         {
+            if (m_playbackDriver != null)
+            {
+                m_playbackDriver.SeekAsync(timeSeconds, default).Forget(LogUnhandled);
+                return;
+            }
             RequirePlayer().Seek(timeSeconds);
             RefreshTimeText();
         }
@@ -234,6 +356,7 @@ namespace PulseVideoPlayer.UI
         /// <exception cref="OperationCanceledException">等待被取消或被更新请求替代。</exception>
         public UniTask SeekAsync(double timeSeconds, CancellationToken cancellationToken = default)
         {
+            if (m_playbackDriver != null) return m_playbackDriver.SeekAsync(timeSeconds, cancellationToken);
             return RequirePlayer().SeekAsync(timeSeconds, cancellationToken);
         }
 
@@ -254,7 +377,6 @@ namespace PulseVideoPlayer.UI
                 throw new ArgumentOutOfRangeException(nameof(progress), "进度必须是有限数值。");
             }
             float normalized = Mathf.Clamp01(progress);
-            StopLoadingSpinner();
             ApplyLoadingProgress(normalized);
             SetLoadingVisible(normalized < 1);
             NotifyProgress(normalized);
@@ -263,12 +385,21 @@ namespace PulseVideoPlayer.UI
         /// <summary>解除画面绑定并请求关闭，不等待原生资源退役。</summary>
         public void Close()
         {
-            DetachPlayer()?.Dispose();
+            if (m_playbackDriver != null) m_playbackDriver.CloseAsync().Forget(LogUnhandled);
+            else CloseVideo();
         }
 
         /// <summary>解除画面绑定并等待旧播放器的打开任务、解码与 GPU 资源退役。</summary>
         /// <returns>旧播放器关闭完成的任务，依赖运行中的 Unity PlayerLoop。</returns>
         public async UniTask CloseAsync()
+        {
+            if (m_playbackDriver != null) { await m_playbackDriver.CloseAsync(); return; }
+            await CloseVideoAsync();
+        }
+
+        /// <summary>仅关闭视频后端，供宿主在释放资源租约前等待原生读取结束。</summary>
+        /// <returns>视频和 GPU 资源退役完成的任务。</returns>
+        public async UniTask CloseVideoAsync()
         {
             PulsePlayer player = DetachPlayer();
             if (player == null) return;
@@ -293,8 +424,9 @@ namespace PulseVideoPlayer.UI
             Shader shader = Resources.Load<Shader>("PulseVideoSurface");
             if (shader == null) throw new InvalidOperationException("未找到 PulseVideoSurface Shader。");
 
+            float preparationProgress = m_playbackDriver != null ? m_loadingProgress : 0;
             int previousGeneration = m_generation;
-            Close();
+            CloseVideo();
             // 关闭事件可能触发新的打开请求，旧调用不能覆盖订阅者创建的会话。
             if (m_generation != previousGeneration + 1 || !isActiveAndEnabled)
                 throw new OperationCanceledException(cancellationToken);
@@ -310,13 +442,13 @@ namespace PulseVideoPlayer.UI
             ConfigureSlider();
             try
             {
-                // 本地首帧准备没有连续百分比，使用可见圆弧代替始终空白的 0% 图像。
-                ShowLoadingSpinner();
+                // 宿主准备时保留已有进度；本地打开从零开始，不修改图像角度。
+                SetLoadingProgress(preparationProgress);
                 EnsureCurrent(generation, openToken);
                 await player.OpenAsync(filePath, openToken);
                 EnsureCurrent(generation, openToken);
                 BindDisplay(player, shader);
-                SetLoadingProgress(1);
+                if (m_playbackDriver == null) SetLoadingProgress(1);
                 EnsureCurrent(generation, openToken);
                 Notify(Ready);
                 EnsureCurrent(generation, openToken);
@@ -324,14 +456,14 @@ namespace PulseVideoPlayer.UI
             }
             catch (OperationCanceledException)
             {
-                if (generation == m_generation) Close();
+                if (generation == m_generation) CloseVideo();
                 throw;
             }
             catch (Exception exception)
             {
                 if (generation == m_generation)
                 {
-                    Close();
+                    CloseVideo();
                     if (m_generation == generation + 1)
                     {
                         m_lastError = exception;
@@ -357,6 +489,7 @@ namespace PulseVideoPlayer.UI
             m_isDragging = false;
 
             // 必须先解除 UI 采样，再释放外部纹理和材质。
+            m_hasPendingSliderSeek = false;
             UnbindDisplay();
             SetLoadingVisible(false);
             ApplyLoadingProgress(0);
@@ -443,10 +576,10 @@ namespace PulseVideoPlayer.UI
                 (canOpen && (state == EPulsePlayerState.Closed || state == EPulsePlayerState.Faulted));
             if (m_boundPlayButton != null)
                 m_boundPlayButton.interactable = isActiveAndEnabled && !m_isLoading && !IsSeeking &&
-                    !m_isDragging && m_videoImage != null && canPlay;
+                    !IsPlaybackBusy && !m_isDragging && m_videoImage != null && canPlay;
             if (m_boundPauseButton != null)
                 m_boundPauseButton.interactable = isActiveAndEnabled && !IsSeeking &&
-                    !m_isDragging && state == EPulsePlayerState.Playing;
+                    !IsPlaybackBusy && !m_isDragging && state == EPulsePlayerState.Playing;
             if (m_boundSlider != null)
                 m_boundSlider.interactable = CanSeek();
         }
@@ -529,12 +662,14 @@ namespace PulseVideoPlayer.UI
             m_boundSlider = null;
             m_sliderInput = null;
             m_isDragging = false;
+            m_hasPendingSliderSeek = false;
         }
 
         private bool CanSeek()
         {
             EPulsePlayerState state = State;
             return isActiveAndEnabled && !m_isLoading && DurationSeconds > 0 &&
+                !IsPlaybackBusy &&
                 (state == EPulsePlayerState.Ready || state == EPulsePlayerState.Playing ||
                 state == EPulsePlayerState.Paused || state == EPulsePlayerState.Ended);
         }
@@ -542,6 +677,7 @@ namespace PulseVideoPlayer.UI
         internal void BeginProgressDrag()
         {
             if (!CanSeek() || m_boundSlider == null) return;
+            m_hasPendingSliderSeek = false;
             m_isDragging = true;
             m_previewProgress = m_boundSlider.value;
         }
@@ -558,7 +694,7 @@ namespace PulseVideoPlayer.UI
             if (!CanSeek()) return;
             m_previewProgress = Mathf.Clamp01(progress);
             if (m_isDragging) RefreshTimeText();
-            else SeekFromSlider(m_previewProgress);
+            else m_hasPendingSliderSeek = true;
         }
 
         private void SeekFromSlider(float progress)
@@ -587,46 +723,10 @@ namespace PulseVideoPlayer.UI
             m_loadingPercentageText.text = percentage.ToString() + "%";
         }
 
-        private void ShowLoadingSpinner()
-        {
-            StopLoadingSpinner();
-            ApplyLoadingProgress(0);
-            m_isLoadingIndeterminate = true;
-            m_spinnerImage = m_loadingProgressImage;
-            if (m_spinnerImage != null)
-            {
-                m_spinnerRotation = m_spinnerImage.rectTransform.localRotation;
-                m_spinnerImage.fillAmount = 0.25f;
-            }
-            if (m_loadingPercentageText != null) m_loadingPercentageText.text = "加载中…";
-            m_displayedPercentage = -1;
-            SetLoadingVisible(true);
-            NotifyProgress(0);
-        }
-
-        private void UpdateLoadingSpinner()
-        {
-            if (!m_isLoading || !m_isLoadingIndeterminate || m_spinnerImage == null) return;
-            RectTransform spinnerTransform = m_spinnerImage.rectTransform;
-            // 圆环应为独立子对象；避免配置到播放器根节点时旋转整个 UI。
-            if (transform == spinnerTransform || transform.IsChildOf(spinnerTransform)) return;
-            spinnerTransform.Rotate(0, 0, -180f * Time.unscaledDeltaTime, Space.Self);
-        }
-
-        private void StopLoadingSpinner()
-        {
-            if (!m_isLoadingIndeterminate) return;
-            if (m_spinnerImage != null) m_spinnerImage.rectTransform.localRotation = m_spinnerRotation;
-            m_spinnerImage = null;
-            m_isLoadingIndeterminate = false;
-            m_displayedPercentage = -1;
-        }
-
         private void SetLoadingVisible(bool visible)
         {
             // 只控制 Graphic，不禁用对象，避免引用所在对象包含本组件时触发自我关闭。
             m_isLoading = visible;
-            if (!visible) StopLoadingSpinner();
             if (m_loadingProgressImage != null) m_loadingProgressImage.enabled = visible;
             if (m_loadingPercentageText != null) m_loadingPercentageText.enabled = visible;
         }
@@ -634,6 +734,9 @@ namespace PulseVideoPlayer.UI
         private string ResolveConfiguredPath()
         {
             if (string.IsNullOrWhiteSpace(m_sourcePath)) throw new ArgumentException("请填写 Source Path。");
+            if (Uri.TryCreate(m_sourcePath, UriKind.Absolute, out Uri address) &&
+                (address.IsFile || address.Scheme == Uri.UriSchemeHttp || address.Scheme == Uri.UriSchemeHttps))
+                return m_sourcePath;
             return m_relativeToStreamingAssets && !Path.IsPathRooted(m_sourcePath)
                 ? Path.Combine(Application.streamingAssetsPath, m_sourcePath) : m_sourcePath;
         }
@@ -681,7 +784,10 @@ namespace PulseVideoPlayer.UI
         private void OnStarted() { Notify(Started); }
         private void OnPaused() { Notify(Paused); }
         private void OnResumed() { Notify(Resumed); }
-        private void OnCompleted() { Notify(Completed); }
+        private void OnCompleted()
+        {
+            if (m_playbackDriver == null || m_playbackDriver.OnVideoCompleted()) Notify(Completed);
+        }
 
         private void OnStopped()
         {
@@ -736,7 +842,7 @@ namespace PulseVideoPlayer.UI
         {
             UnbindButtons();
             UnbindSlider();
-            if (m_player != null || m_openCancellation != null) Close();
+            if (m_playbackDriver != null || m_player != null || m_openCancellation != null) Close();
         }
     }
 }

@@ -80,11 +80,11 @@ Aspect Ratio Fitter 可引用项目已有适配器，或自动读取 RawImage �
 
 Source Path 可填写相对 StreamingAssets 的路径，例如 PulseTests/Synthetic/all_in_one.pulse。
 勾选 Open On Enable 后启用时打开；Play When Ready 决定打开完成后是否自动播放。
-也可以不勾选 Open On Enable，通过播放按钮或无参 Play() 按 Inspector 路径加载并播放；暂停时 Play() 恢复，结束时 Play() 重播。显式路径仍可使用 OpenAsync(真实本地路径)，带视频 URL、音频 URL 和循环配置的 Play/PlayAsync 接口留待下一阶段。
+也可以不勾选 Open On Enable，通过播放按钮或无参 Play() 按 Inspector 路径加载并播放；暂停时 Play() 恢复，结束时 Play() 重播。显式路径仍可使用 OpenAsync(真实本地路径)，带资源地址、音频事件 Key 和循环配置的 Play/PlayAsync 接口由宿主驱动提供，见下文。
 业务程序集直接引用组件时，需要在自己的 asmdef 中添加 PulseVideoPlayer.UI 引用。
 
-本地首帧加载显示旋转圆弧和“加载中…”文字，完成、关闭或失败后隐藏；不提供连续解码百分比。
-加载 Image 使用 Filled / Radial 360，并保持 GameObject 及父对象激活。外部下载流程调用 SetLoadingProgress(0~1) 时恢复真实百分比填充，停止旋转；完成时隐藏。
+加载图只更新 fillAmount，文字显示 0%～100%，不旋转。本地首帧没有连续解码进度，按准备完成节点更新。
+加载 Image 使用 Filled / Radial 360，并保持 GameObject 及父对象激活。调用 SetLoadingProgress(0~1) 直接更新填充和百分比，完成、关闭或失败时隐藏。
 加载控件的 GameObject 应保持激活，组件仅切换 Graphic.enabled。
 时间文字只在整秒变化时更新；暂停后冻结，结束后显示总时长，关闭后显示 0:00/0:00。
 
@@ -103,7 +103,7 @@ CloseAsync 等待本次播放器的原生资源退役，需要 Unity PlayerLoop 
 播放中拖动后继续播放，暂停中拖动只更新画面；结束后拖动进入暂停状态，可点击播放按钮恢复。
 目标画面未提交前冻结播放时钟，避免把定位耗时算入播放时间。
 拖动预览期间原视频继续播放，不逐帧提交定位请求；松手后才采用最终目标。
-Unity 的 Slider 指针按下监听可能先于转发组件执行，因此首次点击也可能提交一次定位请求。
+非拖动的值变化延迟到 LateUpdate 处理，避免 Slider 的按下事件早于指针转发而误触发定位；松手后才提交拖动结果。
 连续请求采用最新请求，旧请求不会被标记为新请求的完成结果。
 
 PulsePlayer 和 UI 组件都提供 Seek(double timeSeconds)、SeekAsync(double timeSeconds, CancellationToken)、IsSeeking。
@@ -117,3 +117,29 @@ GPU 正在使用的样本必须等围栏结束后才能归还及刷新解码器�
 
 Windows 原生读取到 EOF 后保留工作线程等待新 Seek 或 Close，关闭后资源计数仍应归零。
 这里只增加视频跳转，独立音频或字幕尚未实现联动。
+
+
+## 宿主播放适配与新业务入口
+
+组件仍为 PulseVideoPlayer.UI.PulseVideoPlayer，业务使用 Play/PlayAsync。
+新增重载参数为 videoLocation、audioEventKey、EPulseLoopMode、playCount 和 CancellationToken。
+Once 为一次，Infinite 为无限，Count 的次数包含第一次播放。
+旧 Open/OpenAsync 保留兼容并标记 Obsolete；新业务不再使用它们。
+
+IPulsePlaybackDriver 定义在独立包中，只依赖 UniTask，不引用 YooAssets、Alloy 或 Wwise。
+宿主通过 SetPlaybackDriver 注入实现，由实现负责交付文件、持有资源、音轨和循环。
+本仓库宿主实现为 Game.Video.VideoPlaybackCoordinator，支持 YooAssets 地址、HTTP/HTTPS URL、本地路径和 file URI。
+其他项目可实现自己的驱动，使用 Addressables、自建下载器或其他音频系统。
+未注入驱动时继续支持本地单次无音轨播放；带音频或循环的参数需要宿主驱动，缺失时明确报错。
+
+PrepareVideoAsync、StartPreparedVideo、PauseVideo、ResumeVideo、SeekVideoAsync、CloseVideoAsync 是驱动控制视频后端的辅助入口。
+普通业务调用 Play/PlayAsync、Pause、Resume、Seek/SeekAsync、Replay、Close/CloseAsync。
+不要在驱动回调里调用同一个业务入口，否则会再次进入驱动。
+
+预览界面已自动注入驱动。宿主 VideoPackage 使用 RawFileBuildPipeline，Wwise 继续使用 AudioPackage。
+CDN 视频先完整下载到独占临时文件再解码；宿主将下载和各准备阶段映射为整体进度，组件只更新填充量与百分比。
+循环复用文件、纹理和材质，最终轮次结束才发送 Completed，Seek 不重置已完成轮次。
+关闭后等待视频原生读取退出，再释放快照或下载文件；Wwise 播放依赖由音频模块持有到原生声音退出。
+此次未修改原生 ABI，继续使用 ABI 3 DLL。
+宿主具体接入、音轨制作和验收步骤见 Unity 工程 Assets/Res/Video/README.md。
+本次只做静态检查，尚未由用户编译运行验证。
