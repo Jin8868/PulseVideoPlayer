@@ -68,6 +68,16 @@ namespace PulseVideoPlayer.UI
         private IPulsePlaybackDriver m_playbackDriver; // 宿主注入的资源和音画协调实现。
         private bool m_hasPendingSliderSeek; // 非拖动的值变化延迟到指针事件处理完后再提交。
 
+        [Header("字幕")]
+        [Tooltip("可选：绑定 Unity UI Text，字幕自动换行，不使用 TMP。")]
+        [SerializeField] private Text m_subtitleText; // 项目预制体提供的字幕文字控件。
+        [SerializeField] private bool m_subtitlesEnabled = true; // 是否显示已加载的字幕。
+        private PulseSubtitleTrack m_subtitleTrack; // 当前请求的字幕时间轴，关闭时释放。
+        private Text m_boundSubtitleText; // 已配置的字幕控件，换引用时清理旧文字。
+        private string m_displayedSubtitle; // 当前文字缓存，避免逐帧更新 Text。
+
+        /// <summary>Inspector 绑定的可选字幕 Text。</summary>
+        public Text SubtitleText => m_subtitleText;
         /// <summary>Inspector 绑定的视频画面。</summary>
         public RawImage VideoImage => m_videoImage;
         /// <summary>Inspector 绑定的可选加载进度图像。</summary>
@@ -108,6 +118,15 @@ namespace PulseVideoPlayer.UI
         /// <summary>Inspector 配置的总播放次数。</summary>
         public int PlayCount => m_playCount;
 
+        /// <summary>当前是否在播放，准备和定位期间为 false。</summary>
+        public bool IsPlaying => State == EPulsePlayerState.Playing && !IsPlaybackBusy && !IsSeeking;
+        /// <summary>当前是否暂停。</summary>
+        public bool IsPaused => State == EPulsePlayerState.Paused;
+        /// <summary>当前播放位置，单位为秒。</summary>
+        public double PositionSeconds => GetPlayTimeMs() / 1000d;
+        /// <summary>零至一的当前播放进度。</summary>
+        public double NormalizedProgress => DurationSeconds > 0
+            ? Math.Max(0, Math.Min(1, PositionSeconds / DurationSeconds)) : 0;
         /// <summary>首帧与显示材质绑定完成，可以开始播放。</summary>
         public event Action Ready;
         /// <summary>播放器开始推进时钟。</summary>
@@ -140,6 +159,7 @@ namespace PulseVideoPlayer.UI
         private void Update()
         {
             m_playbackDriver?.Tick();
+            RefreshSubtitles();
             RefreshButtons();
             RefreshTimeText();
             // 拖动期间由用户控制滑条，避免播放时钟每帧把滑块拉回。
@@ -156,6 +176,224 @@ namespace PulseVideoPlayer.UI
             // Slider 的值变化可能先于指针按下转发；等待本帧事件分发结束，避免误把按下当成 Seek。
             if (!m_isDragging && CanSeek()) SeekFromSlider(m_previewProgress);
         }
+
+        /// <summary>准备外置 SRT 与可选音轨，并开始播放；资源加载由宿主驱动完成。</summary>
+        /// <param name="videoLocation">视频地址。</param>
+        /// <param name="audioEventKey">宿主音频事件名，空值表示无音轨。</param>
+        /// <param name="subtitleLocation">外置 SRT 地址。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">Count 模式的总播放次数。</param>
+        /// <param name="cancellationToken">播放生命周期令牌。</param>
+        /// <returns>字幕与音画已准备并启动的任务。</returns>
+        /// <exception cref="NotSupportedException">宿主没有提供外置字幕加载实现。</exception>
+        /// <exception cref="ArgumentException">视频或字幕地址为空。</exception>
+        /// <exception cref="FormatException">字幕格式无效。</exception>
+        public UniTask PlayAsync(string videoLocation,
+            string audioEventKey, string subtitleLocation,
+            EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1,
+            CancellationToken cancellationToken = default)
+        {
+            if (!(m_playbackDriver is IPulseSubtitlePlaybackDriver driver))
+                throw new NotSupportedException("请先注入支持 IPulseSubtitlePlaybackDriver 的宿主播放适配器。");
+            return driver.PlayAsync(
+                videoLocation, audioEventKey, subtitleLocation, loopMode, playCount, cancellationToken);
+        }
+
+        /// <summary>播放带外置字幕的视频，失败通过 Failed 和日志报告。</summary>
+        /// <param name="videoLocation">视频地址。</param>
+        /// <param name="audioEventKey">宿主音频事件名。</param>
+        /// <param name="subtitleLocation">外置 SRT 地址。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">指定总次数。</param>
+        public void Play(string videoLocation, string audioEventKey, string subtitleLocation,
+            EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1)
+        {
+            try
+            {
+                PlayAsync(videoLocation, audioEventKey, subtitleLocation, loopMode, playCount)
+                    .Forget(LogUnhandled);
+            }
+            catch (Exception exception) { ReportPlaybackFailure(exception); }
+        }
+
+        /// <summary>从指定时间开始播放视频与可选音轨，失败通过 Failed 报告。</summary>
+        /// <param name="videoLocation">视频资源地址或本地路径。</param>
+        /// <param name="audioEventKey">可选音频事件。</param>
+        /// <param name="startTimeSeconds">首次起点秒数，必须为非负有限值。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">指定总次数。</param>
+        public void Play(string videoLocation, string audioEventKey, double startTimeSeconds,
+            EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1)
+        {
+            Play(videoLocation, audioEventKey, null, startTimeSeconds, loopMode, playCount);
+        }
+
+        /// <summary>从指定时间开始播放视频、可选音轨和可选字幕。</summary>
+        /// <param name="videoLocation">视频资源地址或本地路径。</param>
+        /// <param name="audioEventKey">可选音频事件。</param>
+        /// <param name="subtitleLocation">可选字幕地址。</param>
+        /// <param name="startTimeSeconds">首次起点秒数，超出时长定位末帧，后续循环从零开始。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">指定总次数。</param>
+        public void Play(string videoLocation, string audioEventKey, string subtitleLocation,
+            double startTimeSeconds, EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1)
+        {
+            try
+            {
+                PlayAsync(videoLocation, audioEventKey, subtitleLocation, startTimeSeconds, loopMode, playCount)
+                    .Forget(LogUnhandled);
+            }
+            catch (Exception exception) { ReportPlaybackFailure(exception); }
+        }
+
+        /// <summary>等待视频与可选音轨从指定时间开始播放。</summary>
+        /// <param name="videoLocation">视频地址或本地路径。</param>
+        /// <param name="audioEventKey">可选音频事件。</param>
+        /// <param name="startTimeSeconds">首次起点秒数。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">指定总次数。</param>
+        /// <param name="cancellationToken">播放生命周期令牌。</param>
+        /// <returns>音画已从目标时间启动的任务。</returns>
+        /// <exception cref="ArgumentOutOfRangeException">起点不是非负有限值。</exception>
+        /// <exception cref="NotSupportedException">宿主不支持起点播放。</exception>
+        public UniTask PlayAsync(string videoLocation, string audioEventKey, double startTimeSeconds,
+            EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1,
+            CancellationToken cancellationToken = default)
+        {
+            return PlayAsync(videoLocation, audioEventKey, null, startTimeSeconds,
+                loopMode, playCount, cancellationToken);
+        }
+
+        /// <summary>先定位目标画面，再开始播放音画和字幕，不先播放开头再跳转。</summary>
+        /// <param name="videoLocation">视频地址或本地路径。</param>
+        /// <param name="audioEventKey">可选音频事件。</param>
+        /// <param name="subtitleLocation">可选字幕地址。</param>
+        /// <param name="startTimeSeconds">首次起点秒数。</param>
+        /// <param name="loopMode">循环模式。</param>
+        /// <param name="playCount">指定总次数。</param>
+        /// <param name="cancellationToken">播放生命周期令牌。</param>
+        /// <returns>音画已从目标时间启动的任务。</returns>
+        /// <exception cref="ArgumentOutOfRangeException">起点不是非负有限值。</exception>
+        /// <exception cref="NotSupportedException">宿主不支持起点、字幕、音轨或循环播放。</exception>
+        public UniTask PlayAsync(string videoLocation, string audioEventKey, string subtitleLocation,
+            double startTimeSeconds, EPulseLoopMode loopMode = EPulseLoopMode.Once, int playCount = 1,
+            CancellationToken cancellationToken = default)
+        {
+            if (m_playbackDriver is IPulsePlaybackControlDriver driver)
+                return driver.PlayAsync(videoLocation, audioEventKey, subtitleLocation,
+                    startTimeSeconds, loopMode, playCount, cancellationToken);
+            if (m_playbackDriver != null || !string.IsNullOrWhiteSpace(audioEventKey) ||
+                !string.IsNullOrWhiteSpace(subtitleLocation) || loopMode != EPulseLoopMode.Once)
+                throw new NotSupportedException("当前宿主未提供 IPulsePlaybackControlDriver 起点播放能力。");
+            return OpenCoreAsync(videoLocation, true, cancellationToken, startTimeSeconds);
+        }
+
+        /// <summary>等待最近的视频从零开始重新播放，重置循环计数。</summary>
+        /// <param name="cancellationToken">新播放生命周期令牌。</param>
+        /// <returns>重播已启动的任务。</returns>
+        /// <exception cref="NotSupportedException">宿主不支持可等待重播。</exception>
+        public UniTask ReplayAsync(CancellationToken cancellationToken = default)
+        {
+            if (m_playbackDriver is IPulsePlaybackControlDriver driver) return driver.ReplayAsync(cancellationToken);
+            if (m_playbackDriver != null) throw new NotSupportedException("当前宿主不支持可等待重播。");
+            string filePath = string.IsNullOrWhiteSpace(m_lastOpenedPath) ? ResolveConfiguredPath() : m_lastOpenedPath;
+            return OpenCoreAsync(filePath, true, cancellationToken);
+        }
+
+        /// <summary>播放中暂停，暂停中恢复。</summary>
+        /// <exception cref="InvalidOperationException">当前未处于可切换的播放或暂停状态。</exception>
+        public void TogglePause()
+        {
+            if (State == EPulsePlayerState.Playing) Pause();
+            else if (State == EPulsePlayerState.Paused) Resume();
+            else throw new InvalidOperationException("只有播放或暂停状态可以切换暂停。");
+        }
+
+        /// <summary>按归一化进度跳转，失败通过 Failed 和日志报告。</summary>
+        /// <param name="progress">零至一的目标进度，超出范围会钳制。</param>
+        /// <exception cref="ArgumentOutOfRangeException">进度不是有限值。</exception>
+        public void SeekNormalized(double progress)
+        {
+            Seek(ResolveNormalizedTime(progress));
+        }
+
+        /// <summary>等待按归一化进度定位音画。</summary>
+        /// <param name="progress">零至一的目标进度，超出范围会钳制。</param>
+        /// <param name="cancellationToken">跳转取消令牌。</param>
+        /// <returns>音画定位完成的任务。</returns>
+        /// <exception cref="ArgumentOutOfRangeException">进度不是有限值。</exception>
+        public UniTask SeekNormalizedAsync(double progress, CancellationToken cancellationToken = default)
+        {
+            return SeekAsync(ResolveNormalizedTime(progress), cancellationToken);
+        }
+
+        private double ResolveNormalizedTime(double progress)
+        {
+            if (double.IsNaN(progress) || double.IsInfinity(progress))
+                throw new ArgumentOutOfRangeException(nameof(progress));
+            return Math.Max(0, Math.Min(1, progress)) * DurationSeconds;
+        }
+
+        /// <summary>宿主准备目标起点画面，完成前不绑定开头画面，也不自动播放。</summary>
+        /// <param name="filePath">实际本地视频文件。</param>
+        /// <param name="startTimeSeconds">非负起点秒数。</param>
+        /// <param name="cancellationToken">准备取消令牌。</param>
+        /// <returns>目标画面绑定完成的任务。</returns>
+        /// <exception cref="ArgumentOutOfRangeException">起点不是非负有限值。</exception>
+        public UniTask PrepareVideoAsync(string filePath, double startTimeSeconds,
+            CancellationToken cancellationToken = default)
+        {
+            return OpenCoreAsync(filePath, false, cancellationToken, startTimeSeconds);
+        }
+
+
+        /// <summary>绑定已解析字幕；传空值清空文字并释放当前时间轴引用。</summary>
+        /// <param name="track">与当前视频时间轴一致的字幕。</param>
+        public void SetSubtitleTrack(PulseSubtitleTrack track)
+        {
+            m_subtitleTrack = track;
+            RefreshSubtitles();
+        }
+
+        /// <summary>开关字幕显示，不丢弃已加载的字幕。</summary>
+        /// <param name="enabled">是否显示字幕。</param>
+        public void SetSubtitlesEnabled(bool enabled)
+        {
+            m_subtitlesEnabled = enabled;
+            RefreshSubtitles();
+        }
+
+        private void RefreshSubtitles()
+        {
+            // 换引用时清理原控件，保留项目自己设置的字体、字号、宽度与对齐方式。
+            if (m_boundSubtitleText != m_subtitleText)
+            {
+                if (m_boundSubtitleText != null) m_boundSubtitleText.text = string.Empty;
+                m_boundSubtitleText = m_subtitleText;
+                m_displayedSubtitle = null;
+                if (m_boundSubtitleText != null)
+                {
+                    m_boundSubtitleText.horizontalOverflow = HorizontalWrapMode.Wrap;
+                    m_boundSubtitleText.verticalOverflow = VerticalWrapMode.Overflow;
+                    m_boundSubtitleText.supportRichText = false;
+                    m_boundSubtitleText.raycastTarget = false;
+                }
+            }
+            if (m_boundSubtitleText == null) return;
+
+            // 使用视频自身时钟，暂停自然保留字幕，Seek 和循环会跳到对应的新区间。
+            string caption = m_subtitlesEnabled && m_subtitleTrack != null && m_player != null &&
+                State != EPulsePlayerState.Faulted && State != EPulsePlayerState.Disposed &&
+                State != EPulsePlayerState.Ended
+                ? m_subtitleTrack.GetText((long)GetPlayTimeMs()) : string.Empty;
+            if (!string.Equals(caption, m_displayedSubtitle, StringComparison.Ordinal))
+            {
+                m_boundSubtitleText.text = caption;
+                m_displayedSubtitle = caption;
+            }
+            m_boundSubtitleText.enabled = caption.Length > 0;
+        }
+
 
         /// <summary>注入宿主资源和音频实现；传空值恢复组件本地播放模式。</summary>
         /// <param name="driver">宿主实现，不要求继承 MonoBehaviour。</param>
@@ -236,6 +474,7 @@ namespace PulseVideoPlayer.UI
         public void ReportPlaybackFailure(Exception exception)
         {
             m_lastError = exception;
+            SetSubtitleTrack(null);
             SetLoadingVisible(false);
             NotifyFailure(exception, true);
         }
@@ -256,6 +495,7 @@ namespace PulseVideoPlayer.UI
             catch (Exception exception)
             {
                 m_lastError = exception;
+                SetSubtitleTrack(null);
                 NotifyFailure(exception, false);
                 LogUnhandled(exception);
             }
@@ -327,6 +567,7 @@ namespace PulseVideoPlayer.UI
             catch (Exception exception)
             {
                 m_lastError = exception;
+                SetSubtitleTrack(null);
                 NotifyFailure(exception, false);
                 LogUnhandled(exception);
             }
@@ -413,9 +654,17 @@ namespace PulseVideoPlayer.UI
             Close();
         }
 
-        private async UniTask OpenCoreAsync(string filePath, bool playAfterReady, CancellationToken cancellationToken)
+        private UniTask OpenCoreAsync(string filePath, bool playAfterReady, CancellationToken cancellationToken)
+        {
+            return OpenCoreAsync(filePath, playAfterReady, cancellationToken, 0);
+        }
+
+        private async UniTask OpenCoreAsync(string filePath, bool playAfterReady,
+            CancellationToken cancellationToken, double startTimeSeconds)
         {
             // 验证发生在取消旧会话之前，配置错误不会无故中断仍在播放的视频。
+            if (double.IsNaN(startTimeSeconds) || double.IsInfinity(startTimeSeconds) || startTimeSeconds < 0)
+                throw new ArgumentOutOfRangeException(nameof(startTimeSeconds), "起点必须是非负有限秒数。");
             if (!Application.isPlaying || !isActiveAndEnabled)
                 throw new InvalidOperationException("请在 Play 模式中启用组件后打开视频。");
             if (m_videoImage == null) throw new InvalidOperationException("请绑定视频 RawImage。");
@@ -447,6 +696,15 @@ namespace PulseVideoPlayer.UI
                 EnsureCurrent(generation, openToken);
                 await player.OpenAsync(filePath, openToken);
                 EnsureCurrent(generation, openToken);
+                // 先等待目标帧通过 GPU 提交再绑定画面，避免先显示零秒画面。
+                if (startTimeSeconds > 0)
+                {
+                    PulseMetadata metadata = player.Metadata;
+                    double lastFrameTime = Math.Max(0, (double)metadata.FrameCount - 1) *
+                        metadata.FrameRate.Denominator / metadata.FrameRate.Numerator;
+                    await player.SeekAsync(Math.Min(startTimeSeconds, lastFrameTime), openToken);
+                    EnsureCurrent(generation, openToken);
+                }
                 BindDisplay(player, shader);
                 if (m_playbackDriver == null) SetLoadingProgress(1);
                 EnsureCurrent(generation, openToken);
@@ -467,6 +725,7 @@ namespace PulseVideoPlayer.UI
                     if (m_generation == generation + 1)
                     {
                         m_lastError = exception;
+                        SetSubtitleTrack(null);
                         NotifyFailure(exception, false);
                     }
                 }
@@ -486,6 +745,7 @@ namespace PulseVideoPlayer.UI
             m_openCancellation = null;
             PulsePlayer player = m_player;
             m_player = null;
+            SetSubtitleTrack(null);
             m_isDragging = false;
 
             // 必须先解除 UI 采样，再释放外部纹理和材质。
@@ -799,6 +1059,7 @@ namespace PulseVideoPlayer.UI
         private void OnFailed(Exception exception)
         {
             m_lastError = exception;
+            SetSubtitleTrack(null);
             UnbindDisplay();
             SetLoadingVisible(false);
             NotifyFailure(exception, true);
@@ -833,6 +1094,7 @@ namespace PulseVideoPlayer.UI
 
         private void OnDisable()
         {
+            SetSubtitleTrack(null);
             UnbindButtons();
             UnbindSlider();
             if (Application.isPlaying || m_player != null || m_openCancellation != null) Close();
@@ -840,6 +1102,7 @@ namespace PulseVideoPlayer.UI
 
         private void OnDestroy()
         {
+            SetSubtitleTrack(null);
             UnbindButtons();
             UnbindSlider();
             if (m_playbackDriver != null || m_player != null || m_openCancellation != null) Close();

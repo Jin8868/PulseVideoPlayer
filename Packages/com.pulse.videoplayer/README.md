@@ -143,3 +143,41 @@ CDN 视频先完整下载到独占临时文件再解码；宿主将下载和各�
 此次未修改原生 ABI，继续使用 ABI 3 DLL。
 宿主具体接入、音轨制作和验收步骤见 Unity 工程 Assets/Res/Video/README.md。
 本次只做静态检查，尚未由用户编译运行验证。
+
+## 外置 SRT 字幕
+
+组件 Inspector 新增“字幕 / Subtitle Text”，绑定普通 Unity UI Text，保留项目字体、字号和排版。
+自动换行，保留 SRT 多行文字；关闭、失败、视频结束或切换无字幕请求时清空文字。
+外置字幕不需要重新编译原生插件。
+
+宿主可额外实现 IPulseSubtitlePlaybackDriver，不需要修改原有 IPulsePlaybackDriver。
+通过 Play(videoLocation, audioEventKey, subtitleLocation, loopMode, playCount)
+或 PlayAsync 发起请求，字幕文件交付仍由宿主实现，播放器包不依赖 YooAssets。
+宿主在首帧准备完成后调用 SetSubtitleTrack(PulseSubtitleTrack.Parse(srtText)) 绑定时间轴。
+SetSubtitlesEnabled(bool) 只控制显示，暂停、Seek、Replay 和循环跟随现有视频时钟。
+
+PulseSubtitleTrack 支持 UTF-8 解码后的 SRT、BOM、常见换行、多行、乱序和重叠字幕，样式标签转为纯文本。
+整体解析后保留时间索引和文字，逐帧二分查找，跨起止边界才重建显示字符串。
+不实现 ASS 动效、卡拉 OK 或两行分页。Text 的宽度与字体由项目预制体设置，字幕物体保持激活。
+工程侧参考 Assets/Res/Video/README.md，字幕可通过 TextAsset、本地文件或 HTTP/HTTPS 交付。
+带字幕重载的字符串参数顺序为视频地址、音轨事件、字幕地址；无音轨时显式传入 null。原有无字幕 Play 重载保持兼容。
+
+## 指定起点与播放控制
+
+Play / PlayAsync 增加指定起点重载，例如：
+
+```csharp
+player.Play(videoLocation, audioEventKey, subtitleLocation, startTimeSeconds: 4.0);
+await player.PlayAsync(videoLocation, audioEventKey, startTimeSeconds: 4.0);
+```
+
+起点必须为非负有限秒数，超过时长定位末帧；先定位再绑定显示，不先展示开头画面。
+宿主可实现可选 IPulsePlaybackControlDriver，原有驱动接口保持兼容；本地无音轨模式直接支持。
+首次起点仅影响第一轮；Replay / ReplayAsync 和后续循环从零开始。没有新增重复的 Restart。
+ReplayAsync 等待新请求准备并开始播放，不等待视频播放结束。
+
+组件提供 Pause、Resume、TogglePause、Seek / SeekAsync、SeekNormalized / SeekNormalizedAsync、
+Close / CloseAsync、SetSubtitlesEnabled，以及 IsPlaying、IsPaused、PositionSeconds、NormalizedProgress。
+按秒定位和按零至一的进度定位均保持原来的播放或暂停状态；准备期间仍禁止普通 Seek。
+关键生命周期日志保留，不输出逐步骤耗时、吞吐、校验明细或测试探测日志。
+本次未修改原生 ABI，无需重新编译 DLL；尚未编译或运行验证。
