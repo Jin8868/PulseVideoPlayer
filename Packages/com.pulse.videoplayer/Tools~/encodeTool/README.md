@@ -8,7 +8,7 @@ encodeTool/
 ├── VideoTool.exe            窗口入口
 ├── Dependencies/            FFmpeg 原始 7z 与 7zr.exe
 │   └── FFmpeg/Installed/    就地解压的依赖，Git 忽略
-├── Scripts/                 唯一一套转码规则及测试素材脚本
+├── Scripts/                 唯一一套转码规则脚本
 ├── Source/                  窗口源码、构建脚本、验证说明
 └── log/VideoTool.log        固定追加日志，Git 忽略
 ```
@@ -30,3 +30,6 @@ encodeTool/
 本目录的 EXE、Dependencies 和 Scripts 需一起保留。日志固定追加到 log/VideoTool.log；
 失败时弹窗，按钮或 Ctrl+Shift+C 复制本次运行的完整日志。配置仍保存到用户 LocalAppData。
 工具与原生插件构建职责分开：重新编译窗口见 Source/README.md，原生插件构建见 ../buildTool/README.md。
+
+点击「清空日志」同步清空窗口、复制缓冲区、待显示队列及 log/VideoTool.log，复用原文件。
+任务运行期间也可清空，清空后继续记录新日志，不影响转码或进度。

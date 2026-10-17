@@ -21,7 +21,11 @@ namespace PulseVideoTool
             Directory.CreateDirectory(directory);
             // 固定文件追加记录，反复启动也不会生成新的带时间戳日志文件。
             FilePath = Path.Combine(directory, "VideoTool.log");
-            m_writer = new StreamWriter(FilePath, true, new UTF8Encoding(false));
+            // 使用可定位流保留追加行为，同时允许清空历史内容并复用当前文件句柄。
+            m_writer = new StreamWriter(
+                new FileStream(FilePath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read),
+                new UTF8Encoding(false));
+            m_writer.BaseStream.Seek(0, SeekOrigin.End);
             m_writer.AutoFlush = true;
         }
 
@@ -34,6 +38,22 @@ namespace PulseVideoTool
                 m_writer.WriteLine(line);
                 m_text.AppendLine(line);
                 m_pending.Enqueue(line);
+            }
+        }
+
+        internal void Clear()
+        {
+            lock (m_syncRoot)
+            {
+                if (m_isDisposed) throw new ObjectDisposedException("ToolLog");
+
+                // 与后台写入互斥，先清空磁盘，再丢弃复制缓存和尚未显示的旧日志。
+                m_writer.Flush();
+                m_writer.BaseStream.SetLength(0);
+                m_writer.BaseStream.Position = 0;
+                m_text.Clear();
+                string discardedLine;
+                while (m_pending.TryDequeue(out discardedLine)) { }
             }
         }
 

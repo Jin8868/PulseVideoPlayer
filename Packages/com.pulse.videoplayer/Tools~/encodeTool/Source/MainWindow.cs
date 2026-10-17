@@ -174,6 +174,7 @@ namespace PulseVideoTool
             actions.Children.Add(m_start);
             actions.Children.Add(m_cancel);
             actions.Children.Add(MakeButton("复制全部日志（Ctrl+Shift+C）", OnCopyLog));
+            actions.Children.Add(MakeButton("清空日志", OnClearLog));
             actions.Children.Add(MakeButton("打开日志目录", OnOpenLogs));
             controls.Children.Add(actions);
             m_status.Text = "准备就绪";
@@ -541,6 +542,18 @@ namespace PulseVideoTool
                 m_logs.ScrollToEnd();
             }
             m_batchProgress.Value = Interlocked.CompareExchange(ref m_completedCount, 0, 0);
+        }
+
+        private void OnClearLog(object sender, RoutedEventArgs eventArgs)
+        {
+            try
+            {
+                // 定时刷新与按钮均在界面线程执行，清空后只显示新的后台日志。
+                m_log.Clear();
+                m_logs.Clear();
+                m_status.Text = "已清空界面和日志文件，后续日志将继续记录。";
+            }
+            catch (Exception exception) { ShowError("清空日志失败。", exception); }
         }
 
         private void OnCopyLog(object sender, RoutedEventArgs eventArgs) { CopyLogs(); }
