@@ -1,14 +1,14 @@
 # PulseVideoPlayer 运行时读取
 
 当前已实现本地文件数据源、Pulse v1 容器扫描、严格 UTF-8/JSON 解析、元数据校验和异步加载。
-已加入 Windows x64 / D3D11 首帧解码、GPU 纹理桥接与 PulsePlayer 门面，已在当前 Windows 宿主编译并验证首帧显示及基础打开/关闭。当前新增连续播放与暂停/恢复的待验证源码；音频与 Seek 尚未实现。构建及验证步骤见仓库 Native/Windows/README.md。
+已加入 Windows x64 / D3D11 首帧解码、GPU 纹理桥接与 PulsePlayer 门面，已在当前 Windows 宿主编译并验证首帧显示及基础打开/关闭。当前新增连续播放与暂停/恢复的待验证源码；音频与 Seek 尚未实现。构建及验证步骤见Tools~/buildTool/Source/Windows/README.md。
 
 ```csharp
 PulseMetadata metadata = await PulseMetadataLoader.ReadAsync(filePath, cancellationToken);
 ```
 
 ReadAsync 使用独立线程完成文件 IO，成功、失败、取消均切回 Unity 主线程交付。
-用于运行中的 Unity PlayerLoop；编辑器菜单检查使用同步 PulseMetadataReader.Read。
+用于运行中的 Unity PlayerLoop；同步调用可使用 PulseMetadataReader.Read。
 
 ## 容器约定
 
@@ -30,12 +30,12 @@ IPulseDataSource.ReadAt 允许返回短片段，读取器循环补齐并检查�
 FileSource 串行化定位、读取与关闭，支持幂等 Dispose；关闭后拒绝读取。
 当前仅支持真实文件路径。Android APK 内的 StreamingAssets 需要后续 ContentFdSource 后端。
 
-## 工程验证
+## 工程工具入口
 
-宿主菜单：★AlloyFramework★/视频/读取Pulse测试元数据。
-读取 StreamingAssets/PulseTests 下的 Synthetic、Alpha、Sintel 三组素材并打印尺寸和时间信息。
-验证程序源码位于仓库 Tests/Runtime/PulseReaderChecks.cs，可使用 Unity 随附 Mono/Roslyn 独立运行。
-素材不提交 Git，需要从 Tests/Generated 复制到宿主的 StreamingAssets/PulseTests。
+组件只分发 Tools~/encodeTool/VideoTool.exe；宿主工程负责提供菜单入口。
+当前宿主入口：★AlloyFramework★/视频/打开转码工具。
+旧首帧测试场景、元数据测试菜单及读取器检查程序已移除。
+
 ## 连续播放接口
 
 ```csharp
@@ -53,7 +53,7 @@ IPulseClock 只暴露毫秒时钟，IPulsePlayerEvents 暴露 Started/Paused/Res
 末帧完成后保持 Ended 和最后一帧，需要 Close/OpenAsync 后再 Play 才能重播；Stop 等同请求关闭。
 使用 RawImage 时先解除 texture/material 绑定，再关闭或释放播放器。
 PresentedFrame、PresentedTimeMs、TextureVersion、DroppedFrames 可观察调度结果。
-连续播放已由用户验证。本次 Seek 使用 Windows ABI 3，必须按 Native/Windows/README.md 重新构建 DLL。
+连续播放已由用户验证。本次 Seek 使用 Windows ABI 3，必须按 Tools~/buildTool/Source/Windows/README.md 重新构建 DLL。
 
 
 ## 项目 UI 组件
@@ -78,7 +78,7 @@ Inspector 引用：
 Aspect Ratio Fitter 可引用项目已有适配器，或自动读取 RawImage 上已有适配器；组件不会创建布局。
 显示比例随视频元数据更新，关闭后还原。
 
-Source Path 可填写相对 StreamingAssets 的路径，例如 PulseTests/Synthetic/all_in_one.pulse。
+Source Path 可填写相对 StreamingAssets 的路径，例如 Videos/example.pulse。
 勾选 Open On Enable 后启用时打开；Play When Ready 决定打开完成后是否自动播放。
 也可以不勾选 Open On Enable，通过播放按钮或无参 Play() 按 Inspector 路径加载并播放；暂停时 Play() 恢复，结束时 Play() 重播。显式路径仍可使用 OpenAsync(真实本地路径)，带资源地址、音频事件 Key 和循环配置的 Play/PlayAsync 接口由宿主驱动提供，见下文。
 业务程序集直接引用组件时，需要在自己的 asmdef 中添加 PulseVideoPlayer.UI 引用。

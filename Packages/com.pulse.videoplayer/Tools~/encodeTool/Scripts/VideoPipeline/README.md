@@ -1,11 +1,13 @@
 # 批量视频导出
 
-先运行 Tools/SetupFFmpeg.ps1 安装 FFmpeg。
+本文命令均从 PulseVideoPlayer 仓库根目录执行；相对路径以该目录为基准，Unity 安装路径请按实际位置调整。
+
+先打开组件 Tools~/encodeTool/VideoTool.exe，完成离线初始化。
 
 ## 目录输入
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\VideoPipeline\ExportVideos.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videoplayer\Tools~\encodeTool\Scripts\VideoPipeline\ExportVideos.ps1 `
     -InputDirectory .\Tests\Source\Synthetic `
     -OutputDirectory .\Tests\Generated\MyExport -JsonLog
 ```
@@ -19,20 +21,20 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\VideoPipeline\Export
 PowerShell 会话内可以直接传数组：
 
 ```powershell
-& .\Tools\VideoPipeline\ExportVideos.ps1 `
-    -InputPaths @('D:\Videos\first.mp4', 'D:\Videos\second.mov') `
-    -OutputDirectory 'D:\Videos\Export' -JsonLog
+& .\Packages\com.pulse.videoplayer\Tools~\encodeTool\Scripts\VideoPipeline\ExportVideos.ps1 `
+    -InputPaths @('.\Videos\first.mp4', '.\Videos\second.mov') `
+    -OutputDirectory '.\Videos\Export' -JsonLog
 ```
 
 Unity 面板用 UTF-8 JSON 文件传递多选路径，避免 powershell.exe -File 的数组参数限制：
 
 ```json
-["D:/Videos/first.mp4", "D:/Videos/second.mov"]
+["./Videos/first.mp4", "./Videos/second.mov"]
 ```
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\VideoPipeline\ExportVideos.ps1 `
-    -InputListFile 'D:\Videos\inputs.json' -OutputDirectory 'D:\Videos\Export' -JsonLog
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videoplayer\Tools~\encodeTool\Scripts\VideoPipeline\ExportVideos.ps1 `
+    -InputListFile '.\Videos\inputs.json' -OutputDirectory '.\Videos\Export' -JsonLog
 ```
 
 InputPaths、InputDirectory 和 InputListFile 可合并使用，重复路径自动去重。
@@ -63,7 +65,7 @@ InputPaths、InputDirectory 和 InputListFile 可合并使用，重复路径自�
 ExportVideos.ps1 已接入 .pulse 生成。已有标准化无音轨 MP4 时，可独立调用：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\VideoPipeline\ConvertToPulse.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videoplayer\Tools~\encodeTool\Scripts\VideoPipeline\ConvertToPulse.ps1 `
     -InputDirectory .\Tests\Generated\Synthetic `
     -OutputDirectory .\Tests\Generated\Synthetic -JsonLog
 ```
@@ -72,3 +74,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\VideoPipeline\Conver
 UUID Box 内保存 UTF-8 JSON，运行时直接从 .pulse 读取，不依赖旁路 JSON。
 Container 阶段输出复制字节进度，Verify 阶段回读元数据并通过 ffprobe 验证。
 时间、级别和阶段字段与安装脚本一致，Unity 可以使用同一套实时日志接收器。
+## 离线窗口与可配置依赖
+
+组件自带离线视频工具，见 ../../Source/README.md。ExportVideos.ps1 新增 FFmpegBinDirectory 参数，可指定包含 ffmpeg.exe、ffprobe.exe 和配套 DLL 的目录；省略时使用 encodeTool/Dependencies/FFmpeg/Installed 内的固定共享版本。
+
+窗口复用本目录脚本，在独立临时目录转码并校验后提交产物。修改脚本后运行 Packages/com.pulse.videoplayer/Tools~/encodeTool/Source/Build.ps1 重新生成工具 EXE；转码脚本在本目录只维护一份。
+
+## SDR 输入与产物校验
+
+导出前后检测 PQ、HLG 与已知 HDR 元数据，拒绝把 HDR 简单降成 8 位当作 SDR。未标记传递特性时按 SDR BT.709 处理并记录警告，无法自动识别未标记的 HDR。输出明确设置传递特性，并校验 MP4、单路 H.264、8 位 yuv420p 和 CFR。RGB/Alpha 继续使用原有 Pulse v1 UUID 区域与 Alpha 模式字段。
+
+直接执行脚本是开发调试流程，会保留 MP4 与旁路 JSON；窗口只提交 .pulse、独立音频和字幕，不复制中间产物。

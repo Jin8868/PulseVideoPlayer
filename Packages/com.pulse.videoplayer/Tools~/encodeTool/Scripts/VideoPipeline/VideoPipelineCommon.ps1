@@ -1,5 +1,6 @@
 ﻿Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot '../ToolEnvironment.ps1')
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding($false)
 
 function Write-PipelineLog {
@@ -90,4 +91,23 @@ function Get-MediaInfo {
     $json = Invoke-NativeCapture -Executable $FFprobe -Arguments @(
         '-v', 'error', '-show_streams', '-show_format', '-of', 'json', $Path)
     return $json | ConvertFrom-Json
+}
+
+function Assert-SDRVideo {
+    param($Video)
+    # 8 位像素格式不代表 SDR；必须在编码前后排除 PQ、HLG 和已知 HDR 辅助元数据。
+    $transferProperty = $Video.PSObject.Properties['color_transfer']
+    if ($null -ne $transferProperty -and $transferProperty.Value -in @('smpte2084', 'arib-std-b67')) {
+        throw "检测到 HDR 视频（$($transferProperty.Value)），当前工具只导出 SDR，请先完成 HDR 到 SDR 色调映射。"
+    }
+    $sideDataProperty = $Video.PSObject.Properties['side_data_list']
+    if ($null -ne $sideDataProperty) {
+        foreach ($sideData in @($sideDataProperty.Value)) {
+            $typeProperty = $sideData.PSObject.Properties['side_data_type']
+            if ($null -ne $typeProperty -and
+                $typeProperty.Value -match 'HDR|DOVI|Dolby Vision|Mastering display|Content light level') {
+                throw "检测到 HDR 元数据（$($typeProperty.Value)），请先转换为 SDR。"
+            }
+        }
+    }
 }

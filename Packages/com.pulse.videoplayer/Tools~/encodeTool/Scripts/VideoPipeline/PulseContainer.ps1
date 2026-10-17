@@ -11,6 +11,7 @@ function Get-PulseMetadata {
         throw 'Pulse 输入必须只有一条视频流，请先通过 ExportVideos.ps1 剥离音轨和字幕。'
     }
     $video = $videos[0]
+    Assert-SDRVideo -Video $video
     if ($video.codec_name -ne 'h264' -or $video.pix_fmt -ne 'yuv420p' -or
         $video.avg_frame_rate -ne $video.r_frame_rate) {
         throw 'Pulse 输入必须为 H.264、8bit yuv420p、固定帧率。'

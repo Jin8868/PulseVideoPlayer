@@ -12,8 +12,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
-$repositoryPath = Split-Path -Parent $PSScriptRoot
-$buildPath = Join-Path $repositoryPath 'Native\Windows\build'
+$buildToolPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$packagePath = [IO.Path]::GetFullPath((Join-Path $buildToolPath '../..'))
+$buildPath = Join-Path $buildToolPath 'Build/Windows'
 
 function Write-BuildLog {
     param([string]$Level, [string]$Stage, [string]$Message)
@@ -79,15 +80,14 @@ try {
     Write-BuildLog 'info' 'prepare' "Unity PluginAPI：$pluginAPI"
     Write-BuildLog 'info' 'prepare' "CMake：$CMakePath"
     Invoke-CMakeStep 'configure' @(
-        '-S', (Join-Path $repositoryPath 'Native\Windows'), '-B', $buildPath,
+        '-S', (Join-Path $buildToolPath 'Source/Windows'), '-B', $buildPath,
         '-G', 'Visual Studio 17 2022', '-A', 'x64', "-DUNITY_PLUGIN_API=$pluginAPI"
     )
     Invoke-CMakeStep 'build' @('--build', $buildPath, '--config', $Configuration, '--parallel')
 
     # 只有构建成功才安装 DLL；Unity 已加载旧 DLL 时需要先关闭编辑器。
     $compiledPlugin = Join-Path $buildPath "$Configuration\PulseVideoNative.dll"
-    $pluginDirectory = Join-Path $repositoryPath `
-        'Packages\com.pulse.videoplayer\Runtime\Plugins\Windows\x86_64'
+    $pluginDirectory = Join-Path $packagePath 'Runtime/Plugins/Windows/x86_64'
     New-Item -ItemType Directory -Path $pluginDirectory -Force | Out-Null
     $installedPlugin = Join-Path $pluginDirectory 'PulseVideoNative.dll'
     Copy-Item -LiteralPath $compiledPlugin -Destination $installedPlugin -Force

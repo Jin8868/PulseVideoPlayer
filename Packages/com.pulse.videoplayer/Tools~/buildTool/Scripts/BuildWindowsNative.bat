@@ -2,9 +2,8 @@
 setlocal
 chcp 65001 >nul
 set "pulseUnityEditor=%~1"
-if not defined pulseUnityEditor if exist "D:\Unity\2022.3.17f1c1\Editor\Unity.exe" set "pulseUnityEditor=D:\Unity\2022.3.17f1c1\Editor\Unity.exe"
 if not defined pulseUnityEditor (
-    echo Enter the full path to Unity.exe, without quotes:
+    echo Enter the path to Unity.exe, relative to the current directory or absolute, without quotes:
     set /p "pulseUnityEditor=> "
 )
 if not defined pulseUnityEditor goto missingEditor

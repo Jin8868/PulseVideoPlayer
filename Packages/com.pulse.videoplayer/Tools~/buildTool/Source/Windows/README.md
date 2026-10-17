@@ -1,5 +1,7 @@
 # Windows 原生插件
 
+本文命令均从 PulseVideoPlayer 仓库根目录执行；相对路径以该目录为基准，Unity 安装路径请按实际位置调整。
+
 当前平台范围为 Windows x64 / D3D11，要求 D3D feature level 至少为 11.0。
 上一阶段已验证首帧与基础打开/关闭。当前新增连续播放、暂停/恢复和播放结束状态，尚未由用户编译运行验证。音频和 Seek 尚未实现。
 
@@ -12,17 +14,17 @@ Rider 和 Unity 自身不提供这里需要的完整 C++ 构建环境。
 关闭 Unity（避免替换已加载 DLL 时被锁定），在仓库根目录运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\BuildWindowsNative.ps1 `
-  -UnityEditorPath "D:\Unity\2022.3.17f1c1\Editor\Unity.exe"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\BuildWindowsNative.ps1 `
+  -UnityEditorPath "..\Unity\Editor\Unity.exe"
 ```
 
 日志逐行写入 stdout；加 `-JsonLog` 后每行是一个 JSON 对象。
 后续 Unity 面板可启动该进程并同时异步读取 stdout/stderr，根据退出码判断完成。
 脚本自动寻找 PATH 或 VS 安装目录里的 CMake；也支持 `-CMakePath` 显式指定。
 
-源码：`Native/Windows/PulseVideoNative.cpp`。
-构建目录：`Native/Windows/build`（不提交）。
-构建结果：`Native/Windows/build/Release/PulseVideoNative.dll`。
+源码：`PulseVideoNative.cpp（本目录）`。
+构建目录：`Packages/com.pulse.videoplayer/Tools~/buildTool/Build/Windows`（不提交）。
+构建结果：`Packages/com.pulse.videoplayer/Tools~/buildTool/Build/Windows/Release/PulseVideoNative.dll`。
 自动安装到：`Packages/com.pulse.videoplayer/Runtime/Plugins/Windows/x86_64/PulseVideoNative.dll`。
 脚本生成仅允许 Windows x64 Editor/Player 使用的插件导入配置。
 构建目录保留供增量编译使用，可在不构建时手动删除。
@@ -115,18 +117,18 @@ PlaybackSnapshot 从 40 字节扩展为 48 字节，末尾为 uint64 CompletedSe
 Pulse_GetApiVersion 返回 3；旧 ABI 2 DLL 必须重建。
 诊断 Stage 新增 Seeking，其他阶段编号保持不变。
 
-先关闭 Unity，再双击 Tools/BuildWindowsNative.bat。
-当前机器默认查找 D:\Unity\2022.3.17f1c1\Editor\Unity.exe；找不到时提示输入路径。
+先关闭 Unity，再双击 Packages/com.pulse.videoplayer/Tools~/buildTool/Scripts/BuildWindowsNative.bat。
+未传入 Unity.exe 路径时提示输入；相对路径以启动命令时的工作目录为基准。
 也可以在命令行指定编辑器：
 
 ```bat
-Tools\BuildWindowsNative.bat "D:\Unity\2022.3.17f1c1\Editor\Unity.exe"
+Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\BuildWindowsNative.bat "..\Unity\Editor\Unity.exe"
 ```
 
 BAT 内部调用现有 PS1，使用 ExecutionPolicy Bypass，仅作用于本次 PowerShell 进程。
 双击时构建后暂停以查看日志；传入编辑器路径时不暂停，便于 Unity 工具调用。
 指定路径后可继续传入 -JsonLog、-CMakePath 或 -Configuration 等 PS1 参数。
-例如：BuildWindowsNative.bat "D:\Unity\2022.3.17f1c1\Editor\Unity.exe" -JsonLog。
+例如：BuildWindowsNative.bat "..\Unity\Editor\Unity.exe" -JsonLog。
 BAT 透传标准输出、标准错误和退出码，不改变日志格式，不修改机器执行策略。
 Unity 面板使用隐藏的 cmd.exe /c 调用 BAT，并传入编辑器路径；异步读取 UTF-8 日志。
 

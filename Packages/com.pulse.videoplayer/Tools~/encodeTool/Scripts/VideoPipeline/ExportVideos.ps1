@@ -15,6 +15,7 @@ param(
     [string[]]$InputPaths = @(),
     [string]$InputDirectory,
     [string]$InputListFile,
+    [string]$FFmpegBinDirectory,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [switch]$Recurse,
     [switch]$Alpha,
@@ -29,7 +30,10 @@ param(
 $script:UseJsonLog = [bool]$JsonLog
 . (Join-Path $PSScriptRoot 'VideoPipelineCommon.ps1')
 . (Join-Path $PSScriptRoot 'PulseContainer.ps1')
-$ffmpegBin = Join-Path $PSScriptRoot '../FFMpeg/ffmpeg-9.0.2-essentials_build/bin'
+$ffmpegBin = $FFmpegBinDirectory
+if ([string]::IsNullOrWhiteSpace($ffmpegBin)) {
+    $ffmpegBin = Get-PulseFFmpegBinDirectory
+}
 $ffmpegPath = Join-Path $ffmpegBin 'ffmpeg.exe'
 $ffprobePath = Join-Path $ffmpegBin 'ffprobe.exe'
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -37,7 +41,7 @@ $failedCount = 0
 
 try {
     if (-not (Test-Path -LiteralPath $ffmpegPath) -or -not (Test-Path -LiteralPath $ffprobePath)) {
-        throw '缺少 FFmpeg，请先运行 Tools/SetupFFmpeg.ps1。'
+        throw '缺少 FFmpeg，请在视频工具中离线初始化，或通过 FFmpegBinDirectory 指定已有安装。'
     }
     $files = @($InputPaths)
     if ($InputListFile) {
@@ -78,6 +82,17 @@ try {
                 -Message "处理第 $fileIndex/$($files.Count) 个文件。"
             $mediaInfo = Get-MediaInfo -FFprobe $ffprobePath -Path $inputFile
             $video = @($mediaInfo.streams | Where-Object { $_.codec_type -eq 'video' })[0]
+            Assert-SDRVideo -Video $video
+            $transferProperty = $video.PSObject.Properties['color_transfer']
+            $outputTransfer = 'bt709'
+            if ($null -ne $transferProperty -and
+                -not [string]::IsNullOrWhiteSpace([string]$transferProperty.Value) -and
+                $transferProperty.Value -notin @('unknown', 'unspecified', 'reserved', '')) {
+                $outputTransfer = [string]$transferProperty.Value
+            } else {
+                Write-PipelineLog -Stage 'Validate' -InputFile $inputFile -Level 'Warning' `
+                    -Message '源视频未标记传递特性，按 SDR BT.709 处理；无法自动识别未标记的 HDR 内容。'
+            }
             $duration = [double]::Parse([string]$mediaInfo.format.duration, [Globalization.CultureInfo]::InvariantCulture)
             $stem = [IO.Path]::GetFileNameWithoutExtension($inputFile)
             $outputPath = Join-Path $outputRoot "$stem.mp4"
@@ -90,13 +105,16 @@ try {
                     throw 'Alpha 拼接暂要求源视频宽高均为偶数。'
                 }
                 $filter = 'format=rgba,split=2[rgb][a];[rgb]format=rgb24,pad=iw:ih+2:0:0:black[top];' +
-                    '[a]alphaextract,format=rgb24[bottom];[top][bottom]vstack=inputs=2[v]'
+                    '[a]alphaextract,format=rgb24[bottom];[top][bottom]vstack=inputs=2,' +
+                    "setparams=color_trc=${outputTransfer}[v]"
                 $arguments += @('-filter_complex', $filter, '-map', '[v]')
             } else {
-                $arguments += @('-map', '0:v:0', '-vf', 'pad=ceil(iw/2)*2:ceil(ih/2)*2')
+                $arguments += @('-map', '0:v:0', '-vf',
+                    ('pad=ceil(iw/2)*2:ceil(ih/2)*2,setparams=color_trc=' + $outputTransfer))
             }
             $arguments += @('-an', '-sn', '-dn', '-map_chapters', '-1', '-c:v', 'libx264', '-preset', $Preset,
                 '-crf', [string]$CRF, '-pix_fmt', 'yuv420p', '-profile:v', 'high',
+                '-color_trc', $outputTransfer,
                 '-r', [string]$FrameRate, '-fps_mode', 'cfr', '-g', [string]$GOP,
                 '-keyint_min', [string]$GOP, '-sc_threshold', '0', '-movflags', '+faststart', $outputPath)
             Invoke-FFmpeg -Executable $ffmpegPath -Arguments $arguments -Duration $duration -InputFile $inputFile -ProgressFrameRate $FrameRate
@@ -115,10 +133,15 @@ try {
             }
             $outputInfo = Get-MediaInfo -FFprobe $ffprobePath -Path $outputPath
             $outputVideo = @($outputInfo.streams | Where-Object { $_.codec_type -eq 'video' })[0]
+            Assert-SDRVideo -Video $outputVideo
+            $outputTransferProperty = $outputVideo.PSObject.Properties['color_transfer']
             if ($outputInfo.streams.Count -ne 1 -or $outputVideo.codec_name -ne 'h264' -or $outputVideo.pix_fmt -ne 'yuv420p' -or
                 $outputVideo.avg_frame_rate -ne "$FrameRate/1" -or
+                $outputVideo.r_frame_rate -ne "$FrameRate/1" -or
+                $null -eq $outputTransferProperty -or $outputTransferProperty.Value -ne $outputTransfer -or
+                $outputInfo.format.format_name -notmatch 'mp4' -or
                 @($outputInfo.streams | Where-Object { $_.codec_type -eq 'audio' }).Count -ne 0) {
-                throw '导出产物不符合 H.264 8bit 无音轨规格。'
+                throw '导出产物不符合标准 MP4、单路 CFR H.264、8 位 SDR、无音轨规格。'
             }
             $metadata = [ordered]@{
                 source = [IO.Path]::GetFileName($inputFile)

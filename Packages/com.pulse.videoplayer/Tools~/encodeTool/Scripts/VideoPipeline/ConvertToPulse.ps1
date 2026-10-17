@@ -12,6 +12,7 @@ param(
     [string[]]$InputPaths = @(),
     [string]$InputDirectory,
     [string]$InputListFile,
+    [string]$FFmpegBinDirectory,
     [Parameter(Mandatory = $true)][string]$OutputDirectory,
     [switch]$Recurse,
     [switch]$JsonLog
@@ -20,11 +21,12 @@ param(
 $script:UseJsonLog = [bool]$JsonLog
 . (Join-Path $PSScriptRoot 'VideoPipelineCommon.ps1')
 . (Join-Path $PSScriptRoot 'PulseContainer.ps1')
-$ffprobe = Join-Path $PSScriptRoot '../FFMpeg/ffmpeg-9.0.2-essentials_build/bin/ffprobe.exe'
+if ([string]::IsNullOrWhiteSpace($FFmpegBinDirectory)) { $FFmpegBinDirectory = Get-PulseFFmpegBinDirectory }
+$ffprobe = Join-Path $FFmpegBinDirectory 'ffprobe.exe'
 $failedCount = 0
 
 try {
-    if (-not (Test-Path -LiteralPath $ffprobe)) { throw '请先运行 Tools/SetupFFmpeg.ps1。' }
+    if (-not (Test-Path -LiteralPath $ffprobe)) { throw '请先打开 encodeTool/VideoTool.exe 完成离线初始化。' }
     $files = @($InputPaths)
     if ($InputListFile) {
         $inputList = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $InputListFile).Path) | ConvertFrom-Json

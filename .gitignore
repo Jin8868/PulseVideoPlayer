@@ -1,30 +1,27 @@
-# 本机配置与离线工具缓存
-Tools/**/local.settings.json
-Tools/**/Cache/
-Tools/**/Temp/
-Tools/**/Output/
-Tools/**/bin/
-Tools/**/obj/
-
-# 原生构建产物；发布到 Runtime/Plugins 的插件单独管理
-Native/**/build/
-Native/**/out/
-Native/**/.vs/
-Native/**/*.user
-
-# 通用本机文件
+# 本机通用文件
 .DS_Store
 Thumbs.db
 *.log
 
-# 本机下载的 FFmpeg 工具
-/Tools/FFMpeg/
+# 转码工具本地依赖、日志和源码编译缓存
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/Dependencies/FFmpeg/Installed/
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/Dependencies/FFmpeg/ffmpeg-*-full_build-shared/
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/log/
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/Source/**/bin/
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/Source/**/obj/
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/Source/bin/
+/Packages/com.pulse.videoplayer/Tools~/encodeTool/Source/obj/
+
+# 原生构建缓存；发布到 Runtime/Plugins 的插件单独管理
+/Packages/com.pulse.videoplayer/Tools~/buildTool/Build/
+/Packages/com.pulse.videoplayer/Tools~/buildTool/**/.vs/
+/Packages/com.pulse.videoplayer/Tools~/buildTool/**/*.user
 
 # 下载的源素材与生成的测试产物
 /Tests/Source/
 /Tests/Generated/
 
-# Unity 包只提交运行所需 DLL，调试符号和链接中间产物忽略
+# Unity 包只提交运行所需 DLL，忽略调试符号和链接中间产物
 /Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.pdb
 /Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.ilk
 /Packages/com.pulse.videoplayer/Runtime/Plugins/**/*.lib
