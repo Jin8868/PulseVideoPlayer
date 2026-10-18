@@ -14,7 +14,7 @@ Rider 和 Unity 自身不提供这里需要的完整 C++ 构建环境。
 关闭 Unity（避免替换已加载 DLL 时被锁定），在仓库根目录运行：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\BuildWindowsNative.ps1 `
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\Windows\BuildWindowsNative.ps1 `
   -UnityEditorPath "..\Unity\Editor\Unity.exe"
 ```
 
@@ -117,12 +117,13 @@ PlaybackSnapshot 从 40 字节扩展为 48 字节，末尾为 uint64 CompletedSe
 Pulse_GetApiVersion 返回 3；旧 ABI 2 DLL 必须重建。
 诊断 Stage 新增 Seeking，其他阶段编号保持不变。
 
-先关闭 Unity，再双击 Packages/com.pulse.videoplayer/Tools~/buildTool/Scripts/BuildWindowsNative.bat。
-未传入 Unity.exe 路径时提示输入；相对路径以启动命令时的工作目录为基准。
+先关闭 Unity，再双击 Packages/com.pulse.videoplayer/Tools~/buildTool/Scripts/Windows/BuildWindowsNative.bat。
+双击默认使用 D:\Unity\2022.3.17f1c1\Editor\Unity.exe，也可通过 PULSE_UNITY_EDITOR 环境变量覆盖。
+更换版本可将目标 Unity.exe 拖到 BAT 上；命令行相对编辑器路径以启动时的工作目录为基准。
 也可以在命令行指定编辑器：
 
 ```bat
-Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\BuildWindowsNative.bat "..\Unity\Editor\Unity.exe"
+Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\Windows\BuildWindowsNative.bat "..\Unity\Editor\Unity.exe"
 ```
 
 BAT 内部调用现有 PS1，使用 ExecutionPolicy Bypass，仅作用于本次 PowerShell 进程。

@@ -10,6 +10,13 @@ PulseMetadata metadata = await PulseMetadataLoader.ReadAsync(filePath, cancellat
 ReadAsync 使用独立线程完成文件 IO，成功、失败、取消均切回 Unity 主线程交付。
 用于运行中的 Unity PlayerLoop；同步调用可使用 PulseMetadataReader.Read。
 
+## Android 后端
+
+Android ARM64 / API 24+ / OpenGLES3 的系统解码源码已接入。Surface 路径异常时回退到明确布局的 I420 / NV12 平面上传。
+Vulkan、32 位 ARM 和自动前后台重建尚未实现；未执行编译、打包或真机验收。
+先构建 libPulseVideoNative.so 与 PulseVideoBridge.aar，再由宿主 Unity 打包。
+完整步骤见 [Android 原生说明](Tools~/buildTool/Source/Android/README.md)。
+
 ## 容器约定
 
 .pulse 为标准 MP4，元数据位于顶层 uuid Box。
@@ -28,7 +35,7 @@ JSON 解析器仅支持 v1 使用的整数值，不接受浮点或指数数值�
 
 IPulseDataSource.ReadAt 允许返回短片段，读取器循环补齐并检查取消。
 FileSource 串行化定位、读取与关闭，支持幂等 Dispose；关闭后拒绝读取。
-当前仅支持真实文件路径。Android APK 内的 StreamingAssets 需要后续 ContentFdSource 后端。
+支持真实文件路径与 Android APK 未压缩资源的 jar 路径。Android 通过 fd 区间按需读取，不整份拷出。
 
 ## 工程工具入口
 
@@ -93,7 +100,7 @@ Ready、Started、Paused、Resumed、Stopped、Completed、Failed 和 LoadingPro
 关闭或禁用组件时，先解除 RawImage 的视频纹理和材质绑定，再请求释放底层播放器。
 CloseAsync 等待本次播放器的原生资源退役，需要 Unity PlayerLoop 持续运行。
 本次 Seek 将原生 ABI 升至 3，需要关闭 Unity 后重新构建 DLL。
-当前仍使用 Windows/D3D11 后端，音频尚未接入。
+Windows 使用 D3D11；Android ARM64 新增 OpenGLES3 双路径源码，尚未编译或真机验证。
 
 
 ## 进度条与 Seek（ABI 3）

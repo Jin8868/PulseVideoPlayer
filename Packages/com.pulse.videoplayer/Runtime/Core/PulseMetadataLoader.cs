@@ -7,8 +7,8 @@ namespace PulseVideoPlayer
     /// <summary>在独立读取线程完成文件元数据加载，随后回到 Unity 主线程。</summary>
     public static class PulseMetadataLoader
     {
-        /// <summary>异步读取本地 Pulse 文件，成功、失败和取消均在 Unity 主线程交付。</summary>
-        /// <param name="filePath">真实文件系统中的 Pulse 路径。</param>
+        /// <summary>异步读取 Pulse 文件或 Android APK 内置视频，结果在 Unity 主线程交付。</summary>
+        /// <param name="filePath">真实文件路径，或 Android 未压缩资源的 jar 地址。</param>
         /// <param name="cancellationToken">用于取消读取的令牌。</param>
         /// <returns>完成结构校验的视频元数据。</returns>
         /// <exception cref="ArgumentException">文件路径为空。</exception>
@@ -25,6 +25,14 @@ namespace PulseVideoPlayer
                 throw new ArgumentException("文件路径不能为空。", nameof(filePath));
             }
             cancellationToken.ThrowIfCancellationRequested();
+
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (filePath.StartsWith("jar:", StringComparison.OrdinalIgnoreCase))
+            {
+                // Java 类和 AssetManager 在主线程准备，后续按需读取不调用 Unity API。
+                PulseNative.Initialize();
+            }
+#endif
 
             // 使用显式操作对象承载上下文，不创建捕获参数的运行时闭包。
             var operation = new PulseMetadataReadOperation(filePath, cancellationToken);

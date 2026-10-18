@@ -19,7 +19,7 @@ namespace PulseVideoPlayer
         Ended
     }
 
-    /// <summary>由游戏时钟驱动的 Windows 视频播放器，负责状态、解码会话和 Unity 纹理。</summary>
+    /// <summary>由游戏时钟驱动的跨平台视频播放器，负责状态、解码会话和 Unity 纹理。</summary>
     public sealed class PulsePlayer : IDisposable, IPulseClock, IPulsePlayerEvents
     {
         private const double OPENTIMEOUTSECONDS = 20; // 设备初始化与首帧提交的等待上限。
@@ -30,7 +30,7 @@ namespace PulseVideoPlayer
         private int m_generation; // 打开和关闭请求的代次，阻止旧结果重新绑定。
         private CancellationTokenSource m_openCancellation; // 当前打开操作的取消源。
         private UniTaskCompletionSource m_openFinished; // 打开操作收尾完成信号。
-        private Texture2D m_texture; // 主线程包装的外部 BGRA 纹理。
+        private Texture2D m_texture; // 主线程包装的外部视频纹理。
         private PulseMetadata m_metadata; // 当前已就绪视频的元数据。
         private long m_firstFrameTimestamp; // 首帧原始 PTS，单位为一千万分之一秒。
         private EPulsePlayerState m_state; // 对外可读的主线程状态。
@@ -87,8 +87,8 @@ namespace PulseVideoPlayer
         /// <summary>运行期间发生原生错误时在 Unity 主线程触发。</summary>
         public event Action<Exception> Failed;
 
-        /// <summary>打开本地 Pulse 视频，等待解码和 GPU 首帧转换完成。</summary>
-        /// <param name="filePath">本地 Pulse 文件的真实路径。</param>
+        /// <summary>打开 Pulse 视频，等待解码和 GPU 首帧转换完成。</summary>
+        /// <param name="filePath">本地真实路径，或 Android APK 内未压缩资源的 jar 地址。</param>
         /// <param name="cancellationToken">取消打开的令牌。</param>
         /// <returns>首帧已经可供显示的完成任务。</returns>
         /// <exception cref="InvalidOperationException">对象线程、状态或原生会话无效。</exception>
@@ -124,15 +124,15 @@ namespace PulseVideoPlayer
                 }
                 PulseNativePump.EnsureCreated();
                 double deadline = Time.realtimeSinceStartupAsDouble + OPENTIMEOUTSECONDS;
-                while (WindowsPulseNative.IsDeviceReady() == 0)
+                while (PulseNative.IsDeviceReady() == 0)
                 {
                     EnsureRequestCurrent(generation, openCancellation.Token);
-                    if (Time.realtimeSinceStartupAsDouble > deadline) throw new TimeoutException("D3D11 设备未就绪。");
+                    if (Time.realtimeSinceStartupAsDouble > deadline) throw new TimeoutException("Pulse 图形设备未就绪。");
                     await UniTask.NextFrame(openCancellation.Token);
                 }
                 EnsureRequestCurrent(generation, openCancellation.Token);
                 int matrix = metadata.ColorMatrix == "bt709" ? 1 : 0;
-                int result = WindowsPulseNative.CreateSession(
+                int result = PulseNative.CreateSession(
                     filePath, metadata.EncodedWidth, metadata.EncodedHeight, matrix,
                     metadata.FrameCount, (uint)metadata.FrameRate.Numerator,
                     (uint)metadata.FrameRate.Denominator, out ulong handle);
@@ -141,14 +141,14 @@ namespace PulseVideoPlayer
                 while (true)
                 {
                     EnsureRequestCurrent(generation, openCancellation.Token);
-                    if (WindowsPulseNative.GetSnapshot(handle, out PulseNativeSnapshot snapshot) == 0)
+                    if (PulseNative.GetSnapshot(handle, out PulseNativeSnapshot snapshot) == 0)
                     {
                         throw new InvalidOperationException("原生会话在首帧就绪前消失。");
                     }
                     if (snapshot.State == EPulseNativeState.Faulted)
                     {
                         throw new InvalidOperationException(
-                            $"Pulse 原生失败：阶段 {snapshot.Stage}，HRESULT 0x{snapshot.Result:X8}，" +
+                            $"Pulse 原生失败：阶段 {snapshot.Stage}，错误码 0x{snapshot.Result:X8}，" +
                             $"媒体尺寸 {snapshot.Width}×{snapshot.Height}，" +
                             $"Pulse 尺寸 {metadata.EncodedWidth}×{metadata.EncodedHeight}");
                     }
@@ -160,14 +160,14 @@ namespace PulseVideoPlayer
                         }
                         // 像素仍为编码颜色，Shader 单独处理 RGB 的颜色空间，Alpha 不参与转换。
                         m_texture = Texture2D.CreateExternalTexture(
-                            snapshot.Width, snapshot.Height, TextureFormat.BGRA32, false, true, snapshot.Texture);
+                            snapshot.Width, snapshot.Height, PulseNative.OutputFormat, false, true, snapshot.Texture);
                         m_texture.name = "Pulse First Frame";
                         m_texture.wrapMode = TextureWrapMode.Clamp;
                         m_texture.filterMode = FilterMode.Bilinear;
                         m_metadata = metadata;
                         // 保留源时间轴，后续连续播放使用相对起点计算时间，不要求原始 PTS 为零。
                         m_firstFrameTimestamp = snapshot.Timestamp;
-                        if (WindowsPulseNative.GetPlayback(handle, out PulseNativePlayback playback) == 0)
+                        if (PulseNative.GetPlayback(handle, out PulseNativePlayback playback) == 0)
                         {
                             throw new InvalidOperationException("首帧就绪后无法读取播放快照。");
                         }
@@ -292,7 +292,7 @@ namespace PulseVideoPlayer
             long targetFrame = GetTargetFrame(playTime);
             decimal targetTicks = (decimal)targetFrame * TICKSPERSECOND * m_metadata.FrameRate.Denominator /
                 m_metadata.FrameRate.Numerator;
-            ulong request = WindowsPulseNative.Seek(m_nativeHandle, targetFrame, (long)targetTicks);
+            ulong request = PulseNative.Seek(m_nativeHandle, targetFrame, (long)targetTicks);
             if (request == 0) throw new InvalidOperationException("原生会话拒绝视频跳转。");
             m_playTimeSeconds = playTime;
             m_seekRequest = request;
@@ -335,17 +335,17 @@ namespace PulseVideoPlayer
             try
             {
                 PruneRetiringHandles();
-                if (WindowsPulseNative.GetSnapshot(m_nativeHandle, out PulseNativeSnapshot session) == 0)
+                if (PulseNative.GetSnapshot(m_nativeHandle, out PulseNativeSnapshot session) == 0)
                 {
                     throw new InvalidOperationException("播放期间原生会话消失。");
                 }
                 if (session.State == EPulseNativeState.Faulted)
                 {
                     throw new InvalidOperationException(
-                        $"Pulse 播放失败：阶段 {session.Stage}，HRESULT 0x{session.Result:X8}，" +
+                        $"Pulse 播放失败：阶段 {session.Stage}，错误码 0x{session.Result:X8}，" +
                         $"媒体尺寸 {session.Width}×{session.Height}");
                 }
-                if (WindowsPulseNative.GetPlayback(m_nativeHandle, out PulseNativePlayback playback) == 0)
+                if (PulseNative.GetPlayback(m_nativeHandle, out PulseNativePlayback playback) == 0)
                 {
                     throw new InvalidOperationException("无法读取当前原生播放快照。");
                 }
@@ -430,7 +430,7 @@ namespace PulseVideoPlayer
             if (texture != null) UnityEngine.Object.Destroy(texture);
             if (handle != 0)
             {
-                WindowsPulseNative.CloseSession(handle);
+                PulseNative.CloseSession(handle);
                 m_retiringHandles.Add(handle);
             }
             if (wasActive) Notify(Stopped);
@@ -448,7 +448,7 @@ namespace PulseVideoPlayer
             if (finished != null) await finished.Task;
             foreach (ulong handle in handles)
             {
-                while (WindowsPulseNative.GetSnapshot(handle, out _) != 0) await UniTask.NextFrame();
+                while (PulseNative.GetSnapshot(handle, out _) != 0) await UniTask.NextFrame();
                 m_retiringHandles.Remove(handle);
             }
         }
@@ -493,13 +493,13 @@ namespace PulseVideoPlayer
 
         private void SetNativeTarget(long targetFrame, bool playing)
         {
-            if (WindowsPulseNative.SetTargetFrame(m_nativeHandle, targetFrame, playing ? 1 : 0) == 0)
+            if (PulseNative.SetTargetFrame(m_nativeHandle, targetFrame, playing ? 1 : 0) == 0)
             {
-                if (WindowsPulseNative.GetSnapshot(m_nativeHandle, out PulseNativeSnapshot snapshot) != 0 &&
+                if (PulseNative.GetSnapshot(m_nativeHandle, out PulseNativeSnapshot snapshot) != 0 &&
                     snapshot.State == EPulseNativeState.Faulted)
                 {
                     throw new InvalidOperationException(
-                        $"Pulse 原生失败：阶段 {snapshot.Stage}，HRESULT 0x{snapshot.Result:X8}");
+                        $"Pulse 原生失败：阶段 {snapshot.Stage}，错误码 0x{snapshot.Result:X8}");
                 }
                 throw new InvalidOperationException("原生会话拒绝更新播放目标。");
             }
@@ -518,7 +518,7 @@ namespace PulseVideoPlayer
             // 无需等待 GPU；只移除已经消失的旧句柄，避免长期重开累积托管列表。
             for (int index = m_retiringHandles.Count - 1; index >= 0; index--)
             {
-                if (WindowsPulseNative.GetSnapshot(m_retiringHandles[index], out _) == 0)
+                if (PulseNative.GetSnapshot(m_retiringHandles[index], out _) == 0)
                 {
                     m_retiringHandles.RemoveAt(index);
                 }

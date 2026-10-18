@@ -21,8 +21,8 @@ namespace PulseVideoPlayer
             0xb4, 0x4a, 0x97, 0xfe, 0xd5, 0x07, 0x61, 0xd2
         }; // Pulse v1 UUID 的网络字节序。
 
-        /// <summary>从真实文件路径读取元数据，并在完成后关闭文件。</summary>
-        /// <param name="filePath">本地 Pulse 文件路径。</param>
+        /// <summary>读取元数据并关闭数据源；APK 路径需先通过异步入口完成 Android 初始化。</summary>
+        /// <param name="filePath">本地 Pulse 文件路径，或已初始化的 Android APK 资源 jar 地址。</param>
         /// <param name="cancellationToken">取消本次读取的令牌。</param>
         /// <returns>经结构和区域边界校验的元数据。</returns>
         /// <exception cref="ArgumentException">文件路径为空。</exception>
@@ -32,6 +32,16 @@ namespace PulseVideoPlayer
         public static PulseMetadata Read(string filePath, CancellationToken cancellationToken = default)
         {
             cancellationToken.ThrowIfCancellationRequested();
+#if UNITY_ANDROID && !UNITY_EDITOR
+            if (filePath != null && filePath.StartsWith("jar:", StringComparison.OrdinalIgnoreCase))
+            {
+                // 异步加载入口已在主线程准备 AssetManager；读取线程只使用原生 fd。
+                using (var assetSource = new AndroidAssetSource(filePath))
+                {
+                    return Read(assetSource, cancellationToken);
+                }
+            }
+#endif
             using (var source = new FileSource(filePath))
             {
                 return Read(source, cancellationToken);

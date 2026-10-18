@@ -1,5 +1,4 @@
 using System;
-using UnityEngine;
 
 namespace PulseVideoPlayer
 {
@@ -33,21 +32,20 @@ namespace PulseVideoPlayer
     /// <summary>提供播放器原生资源的手动验证入口。</summary>
     public static class PulseDiagnostics
     {
-        /// <summary>读取当前 Windows 原生后端的全局资源引用统计。</summary>
+        /// <summary>读取当前平台原生后端的全局资源引用统计。</summary>
         /// <returns>采样时已登记会话持有的资源数量及输出纹理字节估算。</returns>
-        /// <exception cref="PlatformNotSupportedException">当前不是 Windows x64 平台。</exception>
-        /// <exception cref="DllNotFoundException">原生 DLL 未安装。</exception>
-        /// <exception cref="EntryPointNotFoundException">DLL 尚未更新到包含诊断入口的版本。</exception>
+        /// <exception cref="PlatformNotSupportedException">当前不是受支持的 64 位平台。</exception>
+        /// <exception cref="DllNotFoundException">原生插件未安装。</exception>
+        /// <exception cref="EntryPointNotFoundException">原生插件尚未更新到包含诊断入口的版本。</exception>
         /// <exception cref="InvalidOperationException">原生统计读取失败。</exception>
         public static PulseResourceSnapshot ReadResources()
         {
             // 统计不创建播放器和驱动器，也不主动触发解码。
-            if (IntPtr.Size != 8 || (Application.platform != RuntimePlatform.WindowsEditor &&
-                Application.platform != RuntimePlatform.WindowsPlayer))
+            if (!PulseNative.IsSupported)
             {
-                throw new PlatformNotSupportedException("当前资源诊断仅支持 Windows x64。");
+                throw new PlatformNotSupportedException("当前资源诊断仅支持 Windows x64 或 Android ARM64。");
             }
-            if (WindowsPulseNative.GetResources(out PulseNativeResources resources) == 0)
+            if (PulseNative.GetResources(out PulseNativeResources resources) == 0)
             {
                 throw new InvalidOperationException("无法读取 Pulse 原生资源统计。");
             }

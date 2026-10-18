@@ -12,7 +12,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding = [Console]::OutputEncoding
-$buildToolPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$buildToolPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $packagePath = [IO.Path]::GetFullPath((Join-Path $buildToolPath '../..'))
 $buildPath = Join-Path $buildToolPath 'Build/Windows'
 

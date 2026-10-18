@@ -994,6 +994,10 @@ namespace PulseVideoPlayer.UI
         private string ResolveConfiguredPath()
         {
             if (string.IsNullOrWhiteSpace(m_sourcePath)) throw new ArgumentException("请填写 Source Path。");
+#if UNITY_ANDROID && !UNITY_EDITOR
+            // 显式 APK 地址已包含 StreamingAssets 根目录，不再重复拼接。
+            if (m_sourcePath.StartsWith("jar:", StringComparison.OrdinalIgnoreCase)) return m_sourcePath;
+#endif
             if (Uri.TryCreate(m_sourcePath, UriKind.Absolute, out Uri address) &&
                 (address.IsFile || address.Scheme == Uri.UriSchemeHttp || address.Scheme == Uri.UriSchemeHttps))
                 return m_sourcePath;

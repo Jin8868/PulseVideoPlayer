@@ -1,6 +1,7 @@
 # PulseVideoPlayer
 
-独立 Unity 视频播放器组件。Windows x64 / D3D11 原生后端已实现，视频由 Windows Media Foundation 解码，
+独立 Unity 视频播放器组件。Windows x64 / D3D11 原生后端已实现；Android ARM64 / OpenGLES3 已加入双路径源码与构建脚本，尚未编译或真机验证。
+Windows 视频由 Media Foundation 解码，
 FFmpeg 只用于离线制作。业务资源加载、Wwise 音轨和循环协调位于宿主工程。
 
 ## 目录
@@ -49,12 +50,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Packages\com.pulse.videopl
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass `
-  -File .\Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\BuildWindowsNative.ps1 `
+  -File .\Packages\com.pulse.videoplayer\Tools~\buildTool\Scripts\Windows\BuildWindowsNative.ps1 `
   -UnityEditorPath '..\Unity\Editor\Unity.exe'
 ```
 
 原生源码位于 buildTool/Source，CMake 中间文件位于 buildTool/Build（Git 忽略），
-构建成功后插件更新到 Runtime/Plugins/Windows/x86_64。当前只有 Windows 构建入口，其他平台后端尚未实现。
+构建成功后插件更新到 Runtime/Plugins/Windows/x86_64。Windows 与 Android 已有构建入口；Android 构建生成 .so 与 Java 桥接 .aar。其他平台后端尚未实现。
 见 [原生构建说明](Packages/com.pulse.videoplayer/Tools~/buildTool/README.md)。
 
 ## 运行与验证
@@ -63,3 +64,6 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 本地素材管理见 [测试说明](Tests/README.md)；素材 Source、Generated 不随 Git 分发。
 Windows 手动验收见 [原生运行说明](Packages/com.pulse.videoplayer/Tools~/buildTool/Source/Windows/README.md)。
 工具验证记录见 [验证说明](Packages/com.pulse.videoplayer/Tools~/encodeTool/Source/Validation.md)。
+
+Android 构建、Surface / I420 / NV12 回退、Unity 配置与增量打包见
+[Android 说明](Packages/com.pulse.videoplayer/Tools~/buildTool/Source/Android/README.md)。

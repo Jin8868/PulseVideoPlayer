@@ -20,32 +20,36 @@ namespace PulseVideoPlayer
 
         internal static void EnsureCreated()
         {
-            if (Application.platform != RuntimePlatform.WindowsEditor &&
-                Application.platform != RuntimePlatform.WindowsPlayer)
+            if (!PulseNative.IsSupported)
             {
-                throw new PlatformNotSupportedException("首版 Pulse 解码后端仅支持 Windows。");
+                throw new PlatformNotSupportedException("Pulse 仅支持 Windows x64 或 Android ARM64。");
             }
-            if (IntPtr.Size != 8 || SystemInfo.graphicsDeviceType != GraphicsDeviceType.Direct3D11)
+            bool isAndroid = Application.platform == RuntimePlatform.Android;
+            GraphicsDeviceType expectedDevice = isAndroid
+                ? GraphicsDeviceType.OpenGLES3
+                : GraphicsDeviceType.Direct3D11;
+            if (SystemInfo.graphicsDeviceType != expectedDevice)
             {
-                throw new PlatformNotSupportedException("首版 Pulse 需要 Windows x64 与 Direct3D11。");
+                throw new PlatformNotSupportedException($"当前 Pulse 后端需要 {expectedDevice}。");
             }
             if (m_instance != null) return;
 
+            PulseNative.Initialize();
             // 先核对 ABI，避免旧 DLL 被错误传入新参数布局。
             try
             {
-                if (WindowsPulseNative.GetApiVersion() != EXPECTEDNATIVEAPIVERSION)
+                if (PulseNative.GetApiVersion() != EXPECTEDNATIVEAPIVERSION)
                 {
-                    throw new InvalidOperationException("Pulse DLL 接口版本不匹配，请重新运行 BuildWindowsNative.ps1。");
+                    throw new InvalidOperationException("Pulse 原生接口版本不匹配，请重新运行对应平台的构建脚本。");
                 }
             }
             catch (EntryPointNotFoundException exception)
             {
-                throw new InvalidOperationException("Pulse DLL 仍为首帧版本，请重新运行 BuildWindowsNative.ps1。", exception);
+                throw new InvalidOperationException("Pulse 原生接口缺失，请重新构建对应平台插件。", exception);
             }
 
             // 先解析 DLL 回调再创建对象，缺失 DLL 时不留下半初始化驱动器。
-            IntPtr renderEvent = WindowsPulseNative.GetRenderEvent();
+            IntPtr renderEvent = PulseNative.GetRenderEvent();
             if (renderEvent == IntPtr.Zero) throw new InvalidOperationException("原生渲染回调为空。");
             var root = new GameObject("Pulse Native Pump");
             root.hideFlags = HideFlags.HideInHierarchy;
@@ -100,14 +104,14 @@ namespace PulseVideoPlayer
 
         private void OnApplicationQuit()
         {
-            if (m_renderEvent != IntPtr.Zero) WindowsPulseNative.CloseAll();
+            if (m_renderEvent != IntPtr.Zero) PulseNative.CloseAll();
         }
 
         private void OnDestroy()
         {
             if (m_instance != this) return;
             m_instance = null;
-            if (m_renderEvent != IntPtr.Zero) WindowsPulseNative.CloseAll();
+            if (m_renderEvent != IntPtr.Zero) PulseNative.CloseAll();
             // 销毁驱动器时释放命令缓冲区持有的原生资源。
             m_renderCommands?.Release();
             m_renderCommands = null;
