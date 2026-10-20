@@ -22,6 +22,7 @@ namespace PulseVideoPlayer
     /// <summary>由游戏时钟驱动的跨平台视频播放器，负责状态、解码会话和 Unity 纹理。</summary>
     public sealed class PulsePlayer : IDisposable, IPulseClock, IPulsePlayerEvents
     {
+        private string m_preparationTimingSummary; // 最近一次打开的耗时明细，关闭后保留供宿主汇总。
         private const double OPENTIMEOUTSECONDS = 20; // 设备初始化与首帧提交的等待上限。
         private const long TICKSPERSECOND = 10000000; // 原生时间戳采用的每秒 tick 数。
         private readonly int m_ownerThreadID; // 限定 Unity 对象操作发生在创建线程。
@@ -54,6 +55,8 @@ namespace PulseVideoPlayer
 
         /// <summary>当前播放器状态。</summary>
         public EPulsePlayerState State => m_state;
+        /// <summary>最近一次打开的阶段耗时；原生阶段统计为主线程轮询观测值。</summary>
+        public string PreparationTimingSummary => m_preparationTimingSummary;
         /// <summary>首帧提交完成后可用于 RawImage 的纹理。</summary>
         public Texture2D Texture => m_texture;
         /// <summary>当前已打开视频的元数据。</summary>
@@ -104,6 +107,13 @@ namespace PulseVideoPlayer
                 throw new InvalidOperationException("请先关闭当前会话再打开新文件。");
             }
             cancellationToken.ThrowIfCancellationRequested();
+            // 每次打开使用独立统计对象，避免关闭或后续请求覆盖仍在收尾的计时。
+            var timings = new PulsePreparationTimings();
+            PulsePreparationTimings nativeTimings = null;
+            bool nativeWaitStarted = false;
+            EPulseNativeStage? observedStage = null;
+            m_preparationTimingSummary = string.Empty;
+            timings.BeginStage("打开上下文");
             int generation = ++m_generation;
             var openCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var finished = new UniTaskCompletionSource();
@@ -113,6 +123,7 @@ namespace PulseVideoPlayer
             m_state = EPulsePlayerState.Opening;
             try
             {
+                timings.BeginStage("元数据读取及校验");
                 PulseMetadata metadata = await PulseMetadataLoader.ReadAsync(filePath, openCancellation.Token);
                 EnsureRequestCurrent(generation, openCancellation.Token);
                 // 原生视频处理器使用 UINT 帧率；播放时间不能超出 100ns 时间戳的整数范围。
@@ -122,7 +133,9 @@ namespace PulseVideoPlayer
                 {
                     throw new InvalidOperationException("视频帧率或时长超出当前原生后端支持范围。");
                 }
+                timings.BeginStage("原生库及渲染驱动初始化");
                 PulseNativePump.EnsureCreated();
+                timings.BeginStage("图形设备就绪等待");
                 double deadline = Time.realtimeSinceStartupAsDouble + OPENTIMEOUTSECONDS;
                 while (PulseNative.IsDeviceReady() == 0)
                 {
@@ -131,6 +144,7 @@ namespace PulseVideoPlayer
                     await UniTask.NextFrame(openCancellation.Token);
                 }
                 EnsureRequestCurrent(generation, openCancellation.Token);
+                timings.BeginStage("原生会话创建");
                 int matrix = metadata.ColorMatrix == "bt709" ? 1 : 0;
                 int result = PulseNative.CreateSession(
                     filePath, metadata.EncodedWidth, metadata.EncodedHeight, matrix,
@@ -138,12 +152,22 @@ namespace PulseVideoPlayer
                     (uint)metadata.FrameRate.Denominator, out ulong handle);
                 if (result < 0) throw new InvalidOperationException($"创建原生会话失败：0x{result:X8}");
                 m_nativeHandle = handle;
+                timings.BeginStage("原生首帧等待");
+                nativeTimings = new PulsePreparationTimings();
+                nativeWaitStarted = true;
+                nativeTimings.BeginStage("首次快照调用");
                 while (true)
                 {
                     EnsureRequestCurrent(generation, openCancellation.Token);
                     if (PulseNative.GetSnapshot(handle, out PulseNativeSnapshot snapshot) == 0)
                     {
                         throw new InvalidOperationException("原生会话在首帧就绪前消失。");
+                    }
+                    if (snapshot.Stage != observedStage)
+                    {
+                        // 阶段可能在两次轮询之间被跳过；此值不是原生函数的精确 CPU 耗时。
+                        observedStage = snapshot.Stage;
+                        nativeTimings.BeginStage("观测阶段" + observedStage);
                     }
                     if (snapshot.State == EPulseNativeState.Faulted)
                     {
@@ -158,6 +182,10 @@ namespace PulseVideoPlayer
                         {
                             throw new InvalidOperationException("首帧纹理为空。");
                         }
+                        timings.AddDetail("原生轮询观测", nativeTimings.Finish());
+                        nativeWaitStarted = false;
+                        timings.BeginStage("外部纹理包装及快照绑定");
+                        timings.AddDetail("编码尺寸", snapshot.Width + "x" + snapshot.Height);
                         // 像素仍为编码颜色，Shader 单独处理 RGB 的颜色空间，Alpha 不参与转换。
                         m_texture = Texture2D.CreateExternalTexture(
                             snapshot.Width, snapshot.Height, PulseNative.OutputFormat, false, true, snapshot.Texture);
@@ -201,6 +229,8 @@ namespace PulseVideoPlayer
             }
             finally
             {
+                if (nativeWaitStarted) timings.AddDetail("原生轮询观测", nativeTimings.Finish());
+                m_preparationTimingSummary = timings.Finish();
                 if (ReferenceEquals(m_openCancellation, openCancellation)) m_openCancellation = null;
                 if (ReferenceEquals(m_openFinished, finished)) m_openFinished = null;
                 openCancellation.Dispose();

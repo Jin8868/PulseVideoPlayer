@@ -12,6 +12,7 @@ namespace PulseVideoPlayer.UI
     [AddComponentMenu("PulseVideoPlayer")]
     public sealed class PulseVideoPlayer : MonoBehaviour, IPulseClock, IPulsePlayerEvents
     {
+        private string m_preparationTimingSummary; // 最近一次首帧、定位与材质绑定的完整耗时。
         private static readonly int m_rgbRectID = Shader.PropertyToID("_RGBRect"); // RGB 采样区域。
         private static readonly int m_alphaRectID = Shader.PropertyToID("_AlphaRect"); // Alpha 采样区域。
         private static readonly int m_hasAlphaID = Shader.PropertyToID("_HasAlpha"); // 是否存在透明通道。
@@ -105,6 +106,8 @@ namespace PulseVideoPlayer.UI
         public PulseMetadata Metadata => m_player?.Metadata;
         /// <summary>最近一次错误，下一次有效打开时清空。</summary>
         public Exception LastError => m_lastError;
+        /// <summary>最近一次准备的耗时明细，关闭后仍可供宿主读取。</summary>
+        public string PreparationTimingSummary => m_preparationTimingSummary;
         /// <summary>是否正在等待最新跳转请求的目标画面。</summary>
         public bool IsSeeking => m_player?.IsSeeking ?? false;
         /// <summary>宿主是否正在准备资源或协调跳转。</summary>
@@ -670,9 +673,13 @@ namespace PulseVideoPlayer.UI
             if (m_videoImage == null) throw new InvalidOperationException("请绑定视频 RawImage。");
             if (string.IsNullOrWhiteSpace(filePath)) throw new ArgumentException("视频路径为空。", nameof(filePath));
             cancellationToken.ThrowIfCancellationRequested();
+            var timings = new PulsePreparationTimings();
+            m_preparationTimingSummary = string.Empty;
+            timings.BeginStage("显示Shader加载");
             Shader shader = Resources.Load<Shader>("PulseVideoSurface");
             if (shader == null) throw new InvalidOperationException("未找到 PulseVideoSurface Shader。");
 
+            timings.BeginStage("旧画面关闭及UI上下文");
             float preparationProgress = m_playbackDriver != null ? m_loadingProgress : 0;
             int previousGeneration = m_generation;
             CloseVideo();
@@ -694,7 +701,9 @@ namespace PulseVideoPlayer.UI
                 // 宿主准备时保留已有进度；本地打开从零开始，不修改图像角度。
                 SetLoadingProgress(preparationProgress);
                 EnsureCurrent(generation, openToken);
+                timings.BeginStage("播放器打开合计");
                 await player.OpenAsync(filePath, openToken);
+                timings.BeginStage("起点校验");
                 EnsureCurrent(generation, openToken);
                 // 先等待目标帧通过 GPU 提交再绑定画面，避免先显示零秒画面。
                 if (startTimeSeconds > 0)
@@ -702,9 +711,11 @@ namespace PulseVideoPlayer.UI
                     PulseMetadata metadata = player.Metadata;
                     double lastFrameTime = Math.Max(0, (double)metadata.FrameCount - 1) *
                         metadata.FrameRate.Denominator / metadata.FrameRate.Numerator;
+                    timings.BeginStage("指定起点Seek及GPU等待");
                     await player.SeekAsync(Math.Min(startTimeSeconds, lastFrameTime), openToken);
                     EnsureCurrent(generation, openToken);
                 }
+                timings.BeginStage("材质绑定及Ready通知");
                 BindDisplay(player, shader);
                 if (m_playbackDriver == null) SetLoadingProgress(1);
                 EnsureCurrent(generation, openToken);
@@ -733,6 +744,10 @@ namespace PulseVideoPlayer.UI
             }
             finally
             {
+                timings.AddDetail("打开明细", player.PreparationTimingSummary);
+                string summary = timings.Finish();
+                if (m_generation == generation || m_generation == generation + 1)
+                    m_preparationTimingSummary = summary;
                 if (ReferenceEquals(m_openCancellation, cancellation)) m_openCancellation = null;
                 cancellation.Dispose();
             }
